@@ -2,7 +2,7 @@
 
 An owner states a purchase rule. A published agent may prepare a cart. A deterministic policy decides. A payment provider is called only after that, and only for the cart that was approved.
 
-The design is in [docs/ENGINE.md](docs/ENGINE.md). The running code is version 0.4 of the Mandate Core Engine.
+The design is in [docs/ENGINE.md](docs/ENGINE.md). The running code is version 0.5 of the Mandate Core Engine.
 
 | Specification | Subject |
 | --- | --- |
