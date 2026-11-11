@@ -13,9 +13,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from mandate_core import __version__
+from mandate_core.settings import database_url as configured_database_url
 from mandate_core.errors import EngineError
 from mandate_core.identity import resolve_execution_context
 from mandate_core.models import default_registry
+from mandate_core.skills import SkillRuntime
 from mandate_core.persistence.agents import AgentRepository
 from mandate_core.runtime import AgentRuntime
 from mandate_core.runtime.sql_store import SqlRuntimeStore
@@ -33,6 +35,7 @@ RESOURCES = [
     {"method": "POST", "path": "/v1/runs/{id}/cancel", "purpose": "Stop a run at the next step. Does not void a payment."},
     {"method": "GET", "path": "/v1/runs/{id}", "purpose": "Read a run, its trace, and its proposal ids."},
     {"method": "GET", "path": "/v1/models", "purpose": "Provider names and capability metadata. No secrets."},
+    {"method": "GET", "path": "/v1/skills", "purpose": "Skills that can be attached. PayPal is not a skill."},
 ]
 
 
@@ -73,7 +76,7 @@ def redis_ok(client) -> bool:
 
 def create_app(database_url: str | None = None, redis_client=None, engine: Engine | None = None) -> FastAPI:
     app = FastAPI(title="Mandate", version="v1")
-    database_url = database_url if database_url is not None else os.environ.get("DATABASE_URL", "")
+    database_url = database_url if database_url is not None else configured_database_url()
     if engine is None and database_url:
         engine = create_engine(database_url, pool_pre_ping=True)
     if redis_client is None and os.environ.get("REDIS_URL"):
@@ -117,6 +120,10 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
             },
             headers={"X-Request-Id": request_id_value},
         )
+
+    @app.get("/v1/skills")
+    def skills():
+        return {"skills": SkillRuntime().list_skills()}
 
     @app.get("/v1/models")
     def models():

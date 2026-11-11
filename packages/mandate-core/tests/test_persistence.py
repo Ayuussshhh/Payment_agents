@@ -1,4 +1,4 @@
-import os
+from mandate_core.settings import database_url
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -11,11 +11,11 @@ from mandate_core.errors import EngineError
 from mandate_core.events import append_event
 from mandate_core.persistence.agents import AgentRepository
 
-pytestmark = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="DATABASE_URL is not set")
+pytestmark = pytest.mark.skipif(not database_url(), reason="DATABASE_URL is not set")
 
 
 def _engine():
-    return create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+    return create_engine(database_url(), pool_pre_ping=True)
 
 
 @pytest.fixture(scope="module")
