@@ -1,0 +1,17 @@
+[project]
+name = "mandate"
+version = "0.1.0"
+requires-python = ">=3.10,<3.11"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/mandate-core", "services/api"]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "httpx>=0.28"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/mandate-core/tests", "services/api/tests"]
