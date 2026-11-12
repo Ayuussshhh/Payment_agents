@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { apiGet, apiPost, idemKey, apiPostAudio } from "../../lib/api";
+import { apiGet, apiPost, idemKey } from "../../lib/api";
 
 import Avatar from "@mui/material/Avatar";
 import Box from "@mui/material/Box";
@@ -23,7 +23,6 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import CheckIcon from "@mui/icons-material/Check";
 import MicNoneIcon from "@mui/icons-material/MicNone";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { Banner, StatusChip } from "../../components/ui";
 
 const TEMPLATES = [
@@ -34,7 +33,6 @@ const TEMPLATES = [
 
 const POLICY_NODE = { id: "policy", label: "Policy evaluation", detail: "Deterministic rules", description: "The engine reads the saved policy version and catalog price. Its decision and reason codes are recorded with the run." };
 const APPROVAL_NODE = { id: "approval", label: "Human approval", detail: "Review exact cart", description: "A person reviews the cart hash and opens an approval. The agent has no approve or capture tool." };
-const VOICE_NODE = { id: "voice", label: "Voice response", detail: "ElevenLabs TTS", description: "Read the final agent response with the voice attached to this published version." };
 
 export default function Agents() {
   const [tab, setTab] = useState("templates");
@@ -53,13 +51,9 @@ export default function Agents() {
   const [goal, setGoal] = useState("");
   const [policies, setPolicies] = useState([]);
   const [policyId, setPolicyId] = useState("");
-  const [voices, setVoices] = useState([]);
-  const [voiceConfigured, setVoiceConfigured] = useState(false);
-  const [voiceId, setVoiceId] = useState("");
   const [workspaceTab, setWorkspaceTab] = useState("workflow");
   const [selectedNodeId, setSelectedNodeId] = useState("agent");
   const [run, setRun] = useState(null);
-  const [audioUrl, setAudioUrl] = useState("");
   const [approvalRequested, setApprovalRequested] = useState([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -71,14 +65,9 @@ export default function Agents() {
       const active = (body.policies || []).filter((item) => item.status === "active");
       setPolicies(active); setPolicyId(active[0]?.policy_id || "");
     }).catch(() => {});
-    apiGet("/v1/voices").then((body) => {
-      setVoiceConfigured(Boolean(body.configured)); setVoices(body.voices || []);
-      if (body.voices?.length) setVoiceId(body.voices[0].voice_id);
-    }).catch(() => {});
   }, [loadAgents]);
-  useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl); }, [audioUrl]);
 
-  const nodes = useMemo(() => buildWorkflowNodes(skills, Boolean(prompt), Boolean(voiceId)), [skills, prompt, voiceId]);
+  const nodes = useMemo(() => buildWorkflowNodes(skills, Boolean(prompt)), [skills, prompt]);
   const selectedNode = nodes.find((item) => item.id === selectedNodeId) || nodes[0];
   const filteredTemplates = TEMPLATES.filter((item) => (templateFilter === "All use cases" || item.group === templateFilter) && `${item.name} ${item.description}`.toLowerCase().includes(templateQuery.toLowerCase()));
 
@@ -104,7 +93,7 @@ export default function Agents() {
       setVersion(latest); setSelectedVersionId(latest?.id || "");
       if (latest) {
         setPrompt(latest.system_prompt || ""); setSkills(latest.skill_names || []);
-        setModel(latest.model?.model || "openai/gpt-4o-mini"); setVoiceId(latest.voice_id || "");
+        setModel(latest.model?.model || "openai/gpt-4o-mini");
       } else { setPrompt(""); setSkills([]); }
     } catch (caught) { setError(caught.message); }
     finally { setBusy(""); }
@@ -113,7 +102,7 @@ export default function Agents() {
   function selectVersion(id) {
     const chosen = versions.find((item) => item.id === id); if (!chosen) return;
     setSelectedVersionId(id); setVersion(chosen); setPrompt(chosen.system_prompt || ""); setSkills(chosen.skill_names || []);
-    setModel(chosen.model?.model || "openai/gpt-4o-mini"); setVoiceId(chosen.voice_id || "");
+    setModel(chosen.model?.model || "openai/gpt-4o-mini");
   }
 
   function toggleSkill(id) {
@@ -130,7 +119,7 @@ export default function Agents() {
         current = created.agent; setAgent(current);
       }
       const published = await apiPost(`/v1/agents/${current.id}/versions`, {
-        prompt, provider: "openai", model, temperature: 0, skill_names: skills, voice_id: voiceId || null,
+        prompt, provider: "openai", model, temperature: 0, skill_names: skills, voice_id: null,
       });
       return { agent: current, version: published.version };
     });
@@ -142,21 +131,16 @@ export default function Agents() {
 
   async function startRun(event) {
     event?.preventDefault();
-    if (!agent || !version) return;
+    // A run executes the latest published version, so an unsaved draft edit must not block it.
+    const runnable = version || versions[0];
+    if (!agent || !runnable) return;
     const body = await act("Run agent", () => apiPost(`/v1/agents/${agent.id}/runs`, { input: { goal, policy_id: policyId } }));
-    if (body?.run) { setRun(body.run); setAudioUrl(""); setWorkspaceTab("preview"); }
+    if (body?.run) { setRun(body.run); setWorkspaceTab("preview"); }
   }
 
   async function requestApproval(proposalId) {
     const body = await act("Request approval", () => apiPost("/v1/approvals", { proposal_id: proposalId }, { idempotencyKey: idemKey() }));
     if (body?.approval) setApprovalRequested((current) => [...new Set([...current, proposalId])]);
-  }
-
-  async function speakResponse() {
-    const text = run?.output?.final_text;
-    if (!text || !voiceId) return;
-    const blob = await act("Generate speech", () => apiPostAudio("/v1/voices/synthesize", { text, voice_id: voiceId }));
-    if (blob) { setAudioUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob); }); }
   }
 
   function dictate() {
@@ -362,22 +346,10 @@ export default function Agents() {
                     </TextField>
                   ) : null}
 
-                  {selectedNode?.id === "voice" ? (
-                    <Stack spacing={1.5}>
-                      <TextField select label="ElevenLabs voice" value={voiceId} onChange={(e) => { setVoiceId(e.target.value); setVersion(null); }} size="small" fullWidth
-                        helperText={voiceConfigured ? "Voice selection is saved into each published version." : ""}>
-                        <MenuItem value="">No voice selected</MenuItem>
-                        {voices.map((voice) => <MenuItem key={voice.voice_id} value={voice.voice_id}>{voice.name} · {voice.category}</MenuItem>)}
-                      </TextField>
-                      {!voiceConfigured ? (
-                        <Typography variant="caption" sx={{ p: 1, borderRadius: 1, bgcolor: "grey.100", color: "text.secondary" }}>Add <code>ELEVENLABS_API_KEY</code> to the engine environment to load voices and generate speech.</Typography>
-                      ) : null}
-                    </Stack>
-                  ) : null}
                 </Box>
               </Box>
             ) : (
-              <PreviewPanel {...{ goal, setGoal, policyId, setPolicyId, policies, version, agent, run, busy, startRun, dictate, speakResponse, audioUrl, approvalRequested, requestApproval, voices, voiceId, setVoiceId, voiceConfigured }} />
+              <PreviewPanel {...{ goal, setGoal, policyId, setPolicyId, policies, version: version || versions[0] || null, agent, run, busy, startRun, dictate, approvalRequested, requestApproval }} />
             )}
           </CardContent>
         </Card>
@@ -396,8 +368,9 @@ function cardButtonSx(selected) {
 }
 
 function PreviewPanel(props) {
-  const { goal, setGoal, policyId, setPolicyId, policies, version, agent, run, busy, startRun, dictate, speakResponse, audioUrl, approvalRequested, requestApproval, voices, voiceId, setVoiceId, voiceConfigured } = props;
-  const runDisabled = !version || !agent || Boolean(busy) || !goal.trim() || (version?.skill_names?.includes("propose") && !policyId);
+  const { goal, setGoal, policyId, setPolicyId, policies, version, agent, run, busy, startRun, dictate, approvalRequested, requestApproval } = props;
+  const needsPolicy = Boolean(version?.skill_names?.includes("propose"));
+  const runDisabled = !version || !agent || Boolean(busy) || !goal.trim() || (needsPolicy && !policyId);
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0,0.95fr) minmax(0,1.05fr)" }, gap: 2, alignItems: "start" }}>
       <Box sx={{ p: 2, border: "1px solid", borderColor: "divider", borderRadius: 2, bgcolor: "grey.50" }}>
@@ -414,15 +387,11 @@ function PreviewPanel(props) {
               <MenuItem value="">Select policy for proposals</MenuItem>
               {policies.map((item) => <MenuItem key={item.id} value={item.policy_id}>{item.name} · v{item.version}</MenuItem>)}
             </TextField>
-            <TextField select label="Voice output" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} size="small" fullWidth>
-              <MenuItem value="">No voice</MenuItem>
-              {voices.map((voice) => <MenuItem key={voice.voice_id} value={voice.voice_id}>{voice.name}</MenuItem>)}
-            </TextField>
             <Button type="submit" variant="contained" disabled={runDisabled} startIcon={busy === "Run agent" ? <CircularProgress size={16} color="inherit" /> : null}>
               {busy === "Run agent" ? "Running workflow…" : "Run workflow →"}
             </Button>
-            {!version ? <Typography variant="caption" color="text.secondary">Publish a workflow version before running a preview.</Typography> : null}
-            {!voiceConfigured ? <Typography variant="caption" color="text.secondary">Voice output needs an ElevenLabs key on the engine.</Typography> : null}
+            {!version ? <Typography variant="caption" color="text.secondary">Publish this workflow first (button at the top right) to run a preview.</Typography> : null}
+            {version && needsPolicy && !policyId ? <Typography variant="caption" color="text.secondary">This agent proposes a cart, so choose a policy context above before running.</Typography> : null}
           </Stack>
         </Box>
       </Box>
@@ -440,12 +409,8 @@ function PreviewPanel(props) {
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>Run ID <code>{run.id}</code> · {run.stop_reason || run.status}</Typography>
             {run.output?.final_text ? (
               <Box sx={{ p: 1.5, mb: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 2, bgcolor: "background.paper" }}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-                  <Typography variant="h6">Agent response</Typography>
-                  {voiceId && voiceConfigured ? <Button size="small" startIcon={<PlayArrowIcon />} onClick={speakResponse} disabled={Boolean(busy)}>{busy === "Generate speech" ? "Generating…" : "Listen"}</Button> : null}
-                </Stack>
+                <Typography variant="h6">Agent response</Typography>
                 <Typography variant="body2" sx={{ mt: 1, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{run.output.final_text}</Typography>
-                {audioUrl ? <Box component="audio" controls src={audioUrl} sx={{ width: "100%", mt: 1.5 }} /> : null}
               </Box>
             ) : null}
             {run.output?.proposal_results?.length ? (
@@ -480,7 +445,7 @@ function PreviewPanel(props) {
           <Box sx={{ textAlign: "center", py: 3 }}>
             <Typography sx={{ fontSize: "1.5rem", opacity: 0.6 }}>◉</Typography>
             <Typography variant="h6">Try the workflow</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Start a preview to see tool calls, web citations, policy outcomes, and a voice-ready response.</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Start a preview to see tool calls, web citations, policy outcomes, and the agent response.</Typography>
           </Box>
         )}
       </Box>
@@ -488,7 +453,7 @@ function PreviewPanel(props) {
   );
 }
 
-function buildWorkflowNodes(skills, hasPrompt, hasVoice) {
+function buildWorkflowNodes(skills, hasPrompt) {
   const nodes = [
     { id: "start", label: "Start", detail: "User task", icon: "⚑", description: "The workflow receives a goal from the run preview." },
     { id: "agent", label: "Agent reasoning", detail: hasPrompt ? "Instructions configured" : "Add instructions", kind: "Agent", icon: "◈", configured: hasPrompt, description: "The model interprets the goal and selects among capabilities published with this version." },
@@ -496,7 +461,6 @@ function buildWorkflowNodes(skills, hasPrompt, hasVoice) {
   for (const id of skills) nodes.push({ id: `tool:${id}`, label: toolTitle(id), detail: id === "web_search" ? "Live public web" : id === "propose" ? "Catalog-backed" : "Workspace records", kind: "Tool", icon: id === "web_search" ? "⌕" : id === "propose" ? "◇" : "▤", configured: true, description: toolDescription(id) });
   if (skills.includes("propose")) nodes.push({ ...POLICY_NODE, kind: "Policy", icon: "⛨", configured: true });
   if (skills.includes("propose")) nodes.push({ ...APPROVAL_NODE, kind: "Approval", icon: "☑", configured: true });
-  if (hasVoice) nodes.push({ ...VOICE_NODE, kind: "Voice", icon: "♫", configured: true });
   nodes.push({ id: "end", label: "End", detail: "Cited response", icon: "◌", description: "Return the final response, source links, and structured proposal outcomes." });
   return nodes;
 }
