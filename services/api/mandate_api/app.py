@@ -26,7 +26,8 @@ from mandate_core.audit import get_timeline, verify_history
 from mandate_core.models import read_usage
 from mandate_core.approval import ApprovalEngine
 from mandate_core.policy import ModelDrafter, PolicyEngine
-from mandate_core.models import SqlUsage, default_registry
+from mandate_core.models import ModelOrchestrator, SqlUsage, default_registry
+from mandate_core.agent import agent_shop
 from mandate_core.commerce import CommerceEngine, PayPalProvider, handle_webhook
 from mandate_core.skills import SkillRuntime
 from mandate_core.skills.catalog import list_products
@@ -60,6 +61,7 @@ RESOURCES = [
     {"method": "POST", "path": "/v1/approvals/{id}/approve", "purpose": "Bind the caller to that exact cart."},
     {"method": "POST", "path": "/v1/approvals/{id}/reject", "purpose": "Reject a pending approval or revoke a valid one."},
     {"method": "GET", "path": "/v1/catalog", "purpose": "The merchant catalog the skill reads. Prices are minor units."},
+    {"method": "POST", "path": "/v1/agent/shop", "purpose": "An AI agent picks a SKU for a goal; the policy decides."},
     {"method": "POST", "path": "/v1/payments", "purpose": "Reserve budget and create a provider order for the approved amount."},
     {"method": "POST", "path": "/v1/payments/{id}/authorize", "purpose": "Authorize the provider order this payment created."},
     {"method": "POST", "path": "/v1/payments/{id}/capture", "purpose": "Capture when the catalog hash still matches. Otherwise void."},
@@ -93,6 +95,12 @@ class VersionIn(BaseModel):
 class RunIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input: dict = Field(default_factory=dict)
+
+
+class ShopIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policy_id: UUID
+    goal: str = ""
 
 
 class PolicyIn(BaseModel):
@@ -386,6 +394,19 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
         if not model_configured():
             return None
         return ModelDrafter(app.state.registry, app.state.model_ref)
+
+    @app.post("/v1/agent/shop")
+    async def agent_shop_route(body: ShopIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            orchestrator = ModelOrchestrator(app.state.registry, SqlUsage(connection))
+            result = await agent_shop(connection, resolved, orchestrator, app.state.model_ref, body.policy_id, body.goal)
+        return {
+            "chosen": {"sku": result["sku"], "reasoning": result["reasoning"], "model": result["model"]},
+            "decision": result["decision"].model_dump(mode="json"),
+            "proposal_id": str(result["proposal_id"]),
+        }
 
     @app.post("/v1/policies")
     def create_policy(body: PolicyIn, request: Request, organization_id: UUID | None = Query(default=None)):

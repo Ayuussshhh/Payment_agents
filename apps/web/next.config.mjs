@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  devIndicators: {
+    position: "bottom-right",
+  },
   async rewrites() {
     const api = process.env.MANDATE_API_URL || "http://127.0.0.1:8001";
     return [

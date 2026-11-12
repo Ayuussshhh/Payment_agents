@@ -10,6 +10,7 @@ const GROUPS = [
     label: "Commerce",
     items: [
       { href: "/", label: "Checkout" },
+      { href: "/catalog", label: "Catalog" },
       { href: "/policies", label: "Policies" },
       { href: "/approvals", label: "Approvals" },
       { href: "/payments", label: "Payments" },

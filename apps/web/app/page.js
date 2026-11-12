@@ -9,6 +9,7 @@ const DEMO_POLICY =
 
 export default function Checkout() {
   const [policy, setPolicy] = useState(null);
+  const [catalogCount, setCatalogCount] = useState(null);
   const [goal, setGoal] = useState("Buy a reliable work laptop for the team, within budget.");
   const [chosen, setChosen] = useState(null);
   const [decision, setDecision] = useState(null);
@@ -29,6 +30,9 @@ export default function Checkout() {
 
   useEffect(() => {
     loadPolicy();
+    apiGet("/v1/catalog")
+      .then((data) => setCatalogCount((data.catalog || []).length))
+      .catch(() => setCatalogCount(null));
   }, [loadPolicy]);
 
   async function wrap(key, fn) {
@@ -118,6 +122,10 @@ export default function Checkout() {
           <span>Goal for the agent</span>
           <textarea rows={2} value={goal} onChange={(event) => setGoal(event.target.value)} />
         </label>
+        <p className="meta">
+          The agent reads {catalogCount != null ? <strong>{catalogCount} products</strong> : "the"} merchant catalog and the budget
+          policy, then proposes one SKU. It never sets a price. <a className="inline-link" href="/catalog">See the catalog →</a>
+        </p>
         <button className="btn btn-primary" onClick={runAgent} disabled={!policy || busy === "agent"}>
           {busy === "agent" ? "The agent is deciding…" : "Run agent"}
         </button>
@@ -161,7 +169,7 @@ export default function Checkout() {
 
       <Step n={4} title="Pay with PayPal" done={false} locked={approval?.status !== "valid"}>
         <p className="meta">Creates a PayPal order for the approved amount and sends you to PayPal to approve it (sandbox).</p>
-        <button className="btn btn-primary" onClick={pay} disabled={approval?.status !== "valid" || busy === "pay"}>
+        <button className="btn btn-paypal" onClick={pay} disabled={approval?.status !== "valid" || busy === "pay"}>
           {busy === "pay" ? "Creating order…" : "Pay with PayPal"}
         </button>
       </Step>
