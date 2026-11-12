@@ -626,7 +626,7 @@ requires-dist = [
 
 [[package]]
 name = "mandate-core"
-version = "0.4.0"
+version = "0.7.0"
 source = { editable = "packages/mandate-core" }
 dependencies = [
     { name = "alembic" },
