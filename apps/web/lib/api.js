@@ -31,6 +31,21 @@ async function call(path, method, body, options = {}) {
 
 export const apiGet = (path) => call(path, "GET");
 export const apiPost = (path, body, options) => call(path, "POST", body ?? {}, options);
+export const apiPut = (path, body) => call(path, "PUT", body ?? {});
+export const apiDelete = (path) => call(path, "DELETE");
+
+export async function apiPostAudio(path, body) {
+  const response = await fetch(`/api/engine${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data?.error?.message || response.statusText || "Audio request failed");
+  }
+  return response.blob();
+}
 
 export function idemKey() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {

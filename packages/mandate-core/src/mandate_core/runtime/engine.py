@@ -147,8 +147,23 @@ class AgentRuntime:
         paused = bool(graph.get_state(config).next)
         stop_reason = state.get("stop_reason") or ("paused" if paused else "completed")
         proposals = list(state.get("proposal_ids") or [])
+        proposal_results = list(state.get("proposal_results") or [])
         trace = [_plain_trace(item) for item in state.get("trace") or []]
-        run.output = {"system_prompt": version.system_prompt, "proposal_ids": proposals, "trace": trace}
+        final_text = ""
+        for message in reversed(state.get("messages") or []):
+            role = message.get("role") if isinstance(message, dict) else getattr(message, "type", "")
+            content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+            if role in {"assistant", "ai"} and content:
+                final_text = content
+                break
+        run.output = {
+            "system_prompt": version.system_prompt,
+            "voice_id": version.voice_id,
+            "proposal_ids": proposals,
+            "proposal_results": proposal_results,
+            "final_text": final_text,
+            "trace": trace,
+        }
         run.stop_reason = stop_reason
         if paused and not run.cancel_requested:
             run.status = "running"
@@ -161,5 +176,8 @@ class AgentRuntime:
 
 def _plain_trace(item) -> dict:
     if isinstance(item, dict):
-        return {"agent": item.get("agent", "buyer"), "text": item.get("text", "")}
+        result = {"agent": item.get("agent", "buyer"), "text": item.get("text", "")}
+        if item.get("url", "").startswith(("https://", "http://")):
+            result["url"] = item["url"]
+        return result
     return {"agent": "buyer", "text": str(item)}

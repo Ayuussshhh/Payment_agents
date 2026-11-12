@@ -41,14 +41,14 @@ _INSERT_VERSION = text(
     """
     insert into agents.agent_versions (
       id, organization_id, agent_id, version, provider, model, temperature,
-      fallbacks, system_prompt, published_by
+      fallbacks, system_prompt, skill_names, voice_id, published_by
     )
     values (
       :id, :organization_id, :agent_id, :version, :provider, :model, :temperature,
-      cast(:fallbacks as jsonb), :system_prompt, :published_by
+      cast(:fallbacks as jsonb), :system_prompt, cast(:skill_names as jsonb), :voice_id, :published_by
     )
     returning id, organization_id, agent_id, version, provider, model, temperature,
-              fallbacks, system_prompt, published_at, published_by
+              fallbacks, system_prompt, skill_names, voice_id, published_at, published_by
     """
 )
 
@@ -60,9 +60,24 @@ _READ_AGENT = text(
     """
 )
 
+_LIST_AGENTS = text(
+    """select id, organization_id, name, description, graph_kind, created_at
+       from agents.agents where organization_id = :organization_id order by created_at desc"""
+)
+
+_LIST_VERSIONS = text(
+    """select id, organization_id, agent_id, version, provider, model, temperature,
+              fallbacks, system_prompt, skill_names, voice_id, published_at, published_by
+       from agents.agent_versions where organization_id = :organization_id and agent_id = :agent_id
+       order by version desc"""
+)
+
 
 def _version(row) -> AgentVersion:
     fallbacks = tuple(FallbackRef.model_validate(item) for item in (row["fallbacks"] or []))
+    skill_names = row.get("skill_names") or []
+    if isinstance(skill_names, str):
+        skill_names = json.loads(skill_names)
     return AgentVersion(
         id=row["id"],
         agent_id=row["agent_id"],
@@ -71,12 +86,19 @@ def _version(row) -> AgentVersion:
         model=ModelRef(provider=row["provider"], model=row["model"], temperature=row["temperature"]),
         fallbacks=fallbacks,
         system_prompt=row["system_prompt"],
+        skill_names=tuple(skill_names),
+        voice_id=row.get("voice_id"),
         published_at=row["published_at"],
         published_by=row["published_by"],
     )
 
 
 class AgentRepository:
+    def list_agents(self, connection: Connection, context: ExecutionContext) -> list[AgentDefinition]:
+        use_tenant_scope(connection, context.organization_id)
+        rows = connection.execute(_LIST_AGENTS, {"organization_id": context.organization_id}).mappings().all()
+        return [AgentDefinition.model_validate(dict(row)) for row in rows]
+
     def create_agent(self, connection: Connection, context: ExecutionContext, name: str, description: str, graph_kind: str) -> AgentDefinition:
         use_tenant_scope(connection, context.organization_id)
         row = connection.execute(
@@ -101,6 +123,21 @@ class AgentRepository:
             raise EngineError("not_found", "That agent does not exist.", 404)
         return AgentDefinition.model_validate(dict(row))
 
+    def list_versions(self, connection: Connection, context: ExecutionContext, agent_id: UUID) -> list[dict]:
+        use_tenant_scope(connection, context.organization_id)
+        if connection.execute(_LOCK_AGENT, {"agent_id": agent_id, "organization_id": context.organization_id}).first() is None:
+            raise EngineError("not_found", "That agent does not exist.", 404)
+        rows = connection.execute(_LIST_VERSIONS, {"organization_id": context.organization_id, "agent_id": agent_id}).mappings().all()
+        versions = []
+        for row in rows:
+            version = _version(row).model_dump(mode="json")
+            names = row["skill_names"] or []
+            if isinstance(names, str):
+                names = json.loads(names)
+            version["skill_names"] = names
+            versions.append(version)
+        return versions
+
     def publish_version(
         self,
         connection: Connection,
@@ -112,6 +149,8 @@ class AgentRepository:
         temperature: float,
         system_prompt: str,
         fallbacks: tuple[FallbackRef, ...] = (),
+        skill_names: tuple[str, ...] = ("list_products", "propose"),
+        voice_id: str | None = None,
     ) -> AgentVersion:
         if context.user_id is None:
             raise EngineError("unauthenticated", "A user is required to publish a version.", 401)
@@ -135,6 +174,8 @@ class AgentRepository:
                 "temperature": temperature,
                 "fallbacks": json.dumps([item.model_dump() for item in fallbacks]),
                 "system_prompt": system_prompt,
+                "skill_names": json.dumps(list(skill_names)),
+                "voice_id": voice_id,
                 "published_by": context.user_id,
             },
         ).mappings().one()

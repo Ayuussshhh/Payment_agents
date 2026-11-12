@@ -38,6 +38,8 @@ class AgentVersion(ContractModel):
     fallbacks: tuple[FallbackRef, ...] = ()
     system_prompt: str
     skill_ids: tuple[UUID, ...] = ()
+    skill_names: tuple[str, ...] = ()
+    voice_id: str | None = None
     published_at: datetime
     published_by: UUID
 

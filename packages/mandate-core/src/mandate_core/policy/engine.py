@@ -16,6 +16,7 @@ from mandate_core.errors import EngineError
 from mandate_core.events import append_event
 from mandate_core.identity import authorize_action
 from mandate_core.persistence.scope import use_tenant_scope
+from mandate_core.persistence.catalog import get_catalog_item
 from mandate_core.policy.compiler import compile_scripted
 from mandate_core.policy.evaluate import decide, decision_from
 from mandate_core.skills.catalog import get_product
@@ -251,11 +252,11 @@ def evaluate_stored(
     return decision_from(result, mandate, body, version.id)
 
 
-def proposal_for_sku(policy_id: UUID, version: int, sku: str, suggested_unit_amount_minor: int | None = None) -> Proposal:
+def proposal_for_sku(policy_id: UUID, version: int, sku: str, suggested_unit_amount_minor: int | None = None, *, product: dict | None = None) -> Proposal:
     """Build a cart from the catalog. A model-suggested price is not read."""
 
     del suggested_unit_amount_minor
-    product = get_product(sku)
+    product = product or get_product(sku)
     if product is None:
         raise EngineError("skill_invalid", "That sku is not in the catalog.", 400)
     line = CartLine(
@@ -268,7 +269,7 @@ def proposal_for_sku(policy_id: UUID, version: int, sku: str, suggested_unit_amo
         storage_type=product["storage_type"],
     )
     return Proposal(
-        currency="USD",
+        currency=product.get("currency", "USD"),
         mandate_id=policy_id,
         mandate_version=version,
         seller=Seller(id="catalog"),
@@ -555,7 +556,16 @@ class PolicyEngine:
         if version_id is None:
             raise EngineError("not_found", "That policy does not exist.", 404)
         version = self._load_version(connection, context, version_id)
-        proposal = proposal_for_sku(policy_id, version.version, sku, suggested_unit_amount_minor)
+        product = get_catalog_item(connection, context.organization_id, sku)
+        if product is None:
+            raise EngineError("skill_invalid", "That SKU is not in this workspace catalog.", 400)
+        if str(product.get("currency", "USD")).strip().upper() != version.currency.upper():
+            raise EngineError(
+                "currency_mismatch",
+                "The catalog item's currency must match the selected policy currency.",
+                409,
+            )
+        proposal = proposal_for_sku(policy_id, version.version, sku, suggested_unit_amount_minor, product=product)
         decision = evaluate_stored(version, proposal, now=now)
         evaluation_id = uuid4()
         proposal_id = uuid4()

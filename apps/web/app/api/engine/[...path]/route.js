@@ -38,10 +38,17 @@ async function forward(request, pathParts) {
       { status: 502 },
     );
   }
+  const contentType = response.headers.get("content-type") || "application/json";
+  if (contentType.startsWith("audio/")) {
+    return new Response(await response.arrayBuffer(), {
+      status: response.status,
+      headers: { "content-type": contentType, "cache-control": "no-store" },
+    });
+  }
   const body = await response.text();
   return new Response(body, {
     status: response.status,
-    headers: { "content-type": response.headers.get("content-type") || "application/json" },
+    headers: { "content-type": contentType },
   });
 }
 
@@ -51,6 +58,16 @@ export async function GET(request, ctx) {
 }
 
 export async function POST(request, ctx) {
+  const { path } = await ctx.params;
+  return forward(request, path);
+}
+
+export async function PUT(request, ctx) {
+  const { path } = await ctx.params;
+  return forward(request, path);
+}
+
+export async function DELETE(request, ctx) {
   const { path } = await ctx.params;
   return forward(request, path);
 }

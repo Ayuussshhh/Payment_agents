@@ -6,8 +6,9 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+import httpx
 from redis import Redis
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -30,9 +31,9 @@ from mandate_core.models import ModelOrchestrator, SqlUsage, default_registry
 from mandate_core.agent import agent_shop
 from mandate_core.commerce import CommerceEngine, PayPalProvider, handle_webhook
 from mandate_core.skills import SkillRuntime
-from mandate_core.skills.catalog import list_products
 from mandate_core.persistence.agents import AgentRepository
-from mandate_core.runtime import AgentRuntime, OrchestratedModel
+from mandate_core.persistence.catalog import archive_catalog_item, catalog_history, list_catalog, save_catalog_item
+from mandate_core.runtime import AgentRuntime, OrchestratedModel, SkillPort
 from mandate_core.runtime.sql_store import SqlRuntimeStore
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -48,6 +49,7 @@ RESOURCES = [
     {"method": "POST", "path": "/v1/runs/{id}/resume", "purpose": "Resume a paused run."},
     {"method": "POST", "path": "/v1/runs/{id}/cancel", "purpose": "Stop a run at the next step. Does not void a payment."},
     {"method": "GET", "path": "/v1/runs/{id}", "purpose": "Read a run, its trace, and its proposal ids."},
+    {"method": "GET", "path": "/v1/runs", "purpose": "List recent runs in the caller's organization."},
     {"method": "GET", "path": "/v1/models", "purpose": "Provider names and capability metadata. No secrets."},
     {"method": "GET", "path": "/v1/skills", "purpose": "Skills that can be attached. PayPal is not a skill."},
     {"method": "POST", "path": "/v1/policies", "purpose": "Compile an instruction into a draft policy version."},
@@ -61,6 +63,13 @@ RESOURCES = [
     {"method": "POST", "path": "/v1/approvals/{id}/approve", "purpose": "Bind the caller to that exact cart."},
     {"method": "POST", "path": "/v1/approvals/{id}/reject", "purpose": "Reject a pending approval or revoke a valid one."},
     {"method": "GET", "path": "/v1/catalog", "purpose": "The merchant catalog the skill reads. Prices are minor units."},
+    {"method": "POST", "path": "/v1/catalog", "purpose": "Create a workspace catalog item and revision."},
+    {"method": "PUT", "path": "/v1/catalog/{sku}", "purpose": "Create an immutable next revision for a catalog item."},
+    {"method": "DELETE", "path": "/v1/catalog/{sku}", "purpose": "Archive an item and record an immutable revision."},
+    {"method": "GET", "path": "/v1/catalog/{sku}/versions", "purpose": "Read catalog revision snapshots."},
+    {"method": "POST", "path": "/v1/catalog/research", "purpose": "Search live public web sources for catalog research."},
+    {"method": "GET", "path": "/v1/voices", "purpose": "List configured ElevenLabs voices."},
+    {"method": "POST", "path": "/v1/voices/synthesize", "purpose": "Generate speech from a run response."},
     {"method": "POST", "path": "/v1/agent/shop", "purpose": "An AI agent picks a SKU for a goal; the policy decides."},
     {"method": "POST", "path": "/v1/payments", "purpose": "Reserve budget and create a provider order for the approved amount."},
     {"method": "POST", "path": "/v1/payments/{id}/authorize", "purpose": "Authorize the provider order this payment created."},
@@ -90,6 +99,16 @@ class VersionIn(BaseModel):
     provider: str
     model: str
     temperature: float = 0
+    skill_names: list[str] = Field(default_factory=lambda: ["list_products", "propose"])
+    voice_id: str | None = None
+
+    @field_validator("skill_names")
+    @classmethod
+    def validate_skill_names(cls, value):
+        allowed = {"list_products", "propose", "web_search"}
+        if any(name not in allowed for name in value):
+            raise ValueError("One or more selected agent capabilities are unavailable.")
+        return list(dict.fromkeys(value))
 
 
 class RunIn(BaseModel):
@@ -106,6 +125,7 @@ class ShopIn(BaseModel):
 class PolicyIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     instruction: str = Field(min_length=1)
+    policy_id: UUID | None = None
 
 
 class DecisionIn(BaseModel):
@@ -144,6 +164,44 @@ class RefundTxnIn(BaseModel):
 class ApiKeyIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1)
+
+
+class CatalogItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=160)
+    brand: str = Field(min_length=1, max_length=100)
+    category: str = Field(default="", max_length=100)
+    description: str = Field(default="", max_length=2_000)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    unit_amount_minor: int = Field(gt=0)
+    ram_gb: int | None = Field(default=None, gt=0)
+    storage_gb: int | None = Field(default=None, gt=0)
+    storage_type: str | None = Field(default=None, max_length=40)
+    source_url: str | None = Field(default=None, max_length=2_000)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value):
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("Currency must be a three-letter code.")
+        return normalized
+
+
+class CatalogCreateIn(CatalogItemIn):
+    sku: str = Field(min_length=1, max_length=80)
+
+
+class ResearchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=2, max_length=300)
+
+
+class SpeechIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=4_000)
+    voice_id: str = Field(min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    model_id: str = Field(default="eleven_flash_v2_5", pattern=r"^(eleven_flash_v2_5|eleven_multilingual_v2|eleven_v3)$")
 
 
 class OnboardingIn(BaseModel):
@@ -320,14 +378,71 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 model=body.model,
                 temperature=body.temperature,
                 system_prompt=body.prompt,
+                skill_names=tuple(body.skill_names),
+                voice_id=body.voice_id,
             )
         return {"version": published.model_dump(mode="json")}
 
-    def runtime_for(connection):
+    @app.get("/v1/agents")
+    def list_agents(request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            rows = agents.list_agents(connection, resolved)
+            result = []
+            for row in rows:
+                versions = agents.list_versions(connection, resolved, row.id)
+                item = row.model_dump(mode="json")
+                item["latest_version"] = versions[0] if versions else None
+                result.append(item)
+        return {"agents": result}
+
+    @app.get("/v1/agents/{agent_id}/versions")
+    def list_agent_versions(agent_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            versions = agents.list_versions(connection, resolved, agent_id)
+        return {"versions": versions}
+
+    def runtime_for(connection, request_context):
         def model_factory(context, run, version):
             return OrchestratedModel(app.state.registry, context, version, run.id, SqlUsage(connection))
 
-        return AgentRuntime(SqlRuntimeStore(connection), app.state.checkpointer, model_factory=model_factory)
+        def skill_handler(name, arguments, graph_context):
+            if name == "list_products":
+                return {"products": list_catalog(connection, request_context)}
+            if name != "propose":
+                return None
+            row = connection.execute(
+                text("select input from agents.agent_runs where id = :run_id and organization_id = :organization_id"),
+                {"run_id": graph_context.run_id, "organization_id": request_context.organization_id},
+            ).mappings().first()
+            policy_value = (row["input"] or {}).get("policy_id") if row else None
+            if not policy_value:
+                raise EngineError("policy_required", "Choose an active policy before asking the agent to propose a cart.", 400)
+            try:
+                policy_id = UUID(str(policy_value))
+            except ValueError as exc:
+                raise EngineError("policy_invalid", "The run policy id is invalid.", 400) from exc
+            execution = request_context.model_copy(update={"run_id": graph_context.run_id, "agent_version_id": graph_context.agent_version_id})
+            decision, evaluation_id, proposal_id = policies.evaluate_sku(
+                connection, execution, policy_id, arguments["sku"]
+            )
+            return {
+                "proposal_id": str(proposal_id),
+                "evaluation_id": str(evaluation_id),
+                "sku": arguments["sku"],
+                "decision": decision.decision,
+                "reason_codes": list(decision.reason_codes),
+                "amount_minor": decision.evaluated_amount_minor,
+                "currency": decision.currency,
+            }
+
+        return AgentRuntime(
+            SqlRuntimeStore(connection), app.state.checkpointer,
+            skills=SkillPort(handler=skill_handler), model_factory=model_factory,
+        )
 
     @app.post("/v1/agents/{agent_id}/runs")
     async def start_run(agent_id: UUID, request: Request, body: RunIn | None = None):
@@ -340,7 +455,7 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 organization_id=None,
                 request_id=request.state.request_id,
             )
-            run = await runtime_for(connection).create_run(resolved, agent_id, None, run_input)
+            run = await runtime_for(connection, resolved).create_run(resolved, agent_id, None, run_input)
         return {"run": run.model_dump(mode="json")}
 
     @app.post("/v1/runs/{run_id}/resume")
@@ -353,7 +468,7 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 organization_id=None,
                 request_id=request.state.request_id,
             )
-            run = await runtime_for(connection).resume_run(resolved, run_id, None)
+            run = await runtime_for(connection, resolved).resume_run(resolved, run_id, None)
         return {"run": run.model_dump(mode="json")}
 
     @app.post("/v1/runs/{run_id}/cancel")
@@ -366,7 +481,7 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 organization_id=None,
                 request_id=request.state.request_id,
             )
-            run = await runtime_for(connection).cancel_run(resolved, run_id)
+            run = await runtime_for(connection, resolved).cancel_run(resolved, run_id)
         return {"run": run.model_dump(mode="json")}
 
     @app.get("/v1/runs/{run_id}")
@@ -383,6 +498,34 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
         if run is None:
             raise EngineError("not_found", "That run does not exist.", 404)
         return {"run": run.model_dump(mode="json")}
+
+    @app.get("/v1/runs")
+    def list_runs(request: Request, limit: int = Query(default=50, ge=1, le=100)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=None,
+                request_id=request.state.request_id,
+            )
+            from mandate_core.persistence.scope import use_tenant_scope
+            use_tenant_scope(connection, resolved.organization_id)
+            rows = connection.execute(
+                text("""
+                    select r.id, r.agent_version_id, r.policy_version_id, r.status,
+                           r.input, r.output, r.stop_reason, r.created_at, r.finished_at,
+                           a.id as agent_id, a.name as agent_name, v.version as agent_version
+                    from agents.agent_runs r
+                    join agents.agent_versions v on v.id = r.agent_version_id
+                    join agents.agents a on a.id = v.agent_id
+                    where r.organization_id = :organization_id
+                    order by r.created_at desc
+                    limit :limit
+                """),
+                {"organization_id": resolved.organization_id, "limit": limit},
+            ).mappings().all()
+        return {"runs": [dict(row) for row in rows]}
 
     def require_idempotency(request: Request) -> str:
         key = (request.headers.get("idempotency-key") or "").strip()
@@ -418,7 +561,7 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 organization_id=organization_id,
                 request_id=request.state.request_id,
             )
-            created = policies.create_draft(connection, resolved, body.instruction, drafter=policy_drafter())
+            created = policies.add_version(connection, resolved, body.policy_id, body.instruction, drafter=policy_drafter()) if body.policy_id else policies.create_draft(connection, resolved, body.instruction, drafter=policy_drafter())
         return {"policy": created.model_dump(mode="json")}
 
     @app.get("/v1/policies")
@@ -566,8 +709,105 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
         return CommerceEngine(payment_provider())
 
     @app.get("/v1/catalog")
-    def catalog():
-        return {"catalog": list_products()}
+    def catalog(request: Request, include_archived: bool = False, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            items = list_catalog(connection, resolved, include_archived=include_archived)
+        return {"catalog": items}
+
+    @app.post("/v1/catalog")
+    def create_catalog_item(body: CatalogCreateIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            item = save_catalog_item(connection, resolved, body.sku, body.model_dump(exclude={"sku"}))
+        return {"item": item}
+
+    @app.put("/v1/catalog/{sku}")
+    def update_catalog_item(sku: str, body: CatalogItemIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            item = save_catalog_item(connection, resolved, sku, body.model_dump())
+        return {"item": item}
+
+    @app.delete("/v1/catalog/{sku}")
+    def delete_catalog_item(sku: str, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            item = archive_catalog_item(connection, resolved, sku)
+        return {"item": item}
+
+    @app.get("/v1/catalog/{sku}/versions")
+    def catalog_item_versions(sku: str, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            versions = catalog_history(connection, resolved, sku)
+        return {"versions": versions}
+
+    @app.post("/v1/catalog/research")
+    async def research_catalog(body: ResearchIn, request: Request):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolve_execution_context(connection, token, organization_id=None, request_id=request.state.request_id)
+        api_key = os.environ.get("TAVILY_API_KEY", "").strip()
+        if not api_key:
+            raise EngineError("web_search_unconfigured", "Set TAVILY_API_KEY on the engine to research catalog items.", 503)
+        async with httpx.AsyncClient(timeout=14) as client:
+            try:
+                response = await client.post(
+                    "https://api.tavily.com/search",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"query": body.query, "search_depth": "basic", "max_results": 6, "include_answer": False},
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise EngineError("web_search_failed", "The web research provider could not complete this search.", 502) from exc
+        data = response.json()
+        results = [{"title": row.get("title", ""), "url": row.get("url", ""), "content": row.get("content", "")[:800]}
+                   for row in (data.get("results") or [])[:6]
+                   if row.get("url", "").startswith(("https://", "http://"))]
+        return {"query": body.query, "results": results}
+
+    @app.get("/v1/voices")
+    async def list_voices(request: Request):
+        require_session(request)
+        api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+        if not api_key:
+            return {"configured": False, "voices": []}
+        async with httpx.AsyncClient(timeout=12) as client:
+            try:
+                response = await client.get("https://api.elevenlabs.io/v2/voices", headers={"xi-api-key": api_key}, params={"page_size": 100})
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise EngineError("voice_provider_error", "ElevenLabs could not list voices for this key.", 502) from exc
+        voices = [{"voice_id": row.get("voice_id"), "name": row.get("name", "Unnamed voice"),
+                   "category": row.get("category", ""), "description": row.get("description", ""),
+                   "preview_url": row.get("preview_url")}
+                  for row in response.json().get("voices", []) if row.get("voice_id")]
+        return {"configured": True, "voices": voices}
+
+    @app.post("/v1/voices/synthesize")
+    async def synthesize_speech(body: SpeechIn, request: Request):
+        require_session(request)
+        api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+        if not api_key:
+            raise EngineError("voice_provider_unconfigured", "Set ELEVENLABS_API_KEY on the engine to generate speech.", 503)
+        async with httpx.AsyncClient(timeout=35) as client:
+            try:
+                response = await client.post(
+                    f"https://api.elevenlabs.io/v1/text-to-speech/{body.voice_id}",
+                    headers={"xi-api-key": api_key, "content-type": "application/json"},
+                    params={"output_format": "mp3_44100_128"},
+                    json={"text": body.text, "model_id": body.model_id},
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise EngineError("voice_provider_error", "ElevenLabs could not generate speech for this response.", 502) from exc
+        return Response(content=response.content, media_type=response.headers.get("content-type", "audio/mpeg"), headers={"cache-control": "no-store"})
 
     @app.post("/v1/payments")
     async def create_payment(body: PaymentIn, request: Request, organization_id: UUID | None = Query(default=None)):

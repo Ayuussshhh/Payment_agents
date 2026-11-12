@@ -20,7 +20,7 @@ from mandate_core.errors import EngineError
 from mandate_core.models.orchestrator import ModelOrchestrator
 from mandate_core.models.types import ModelMessage, ModelRequest
 from mandate_core.policy import PolicyEngine
-from mandate_core.skills.catalog import get_product, list_products
+from mandate_core.persistence.catalog import get_catalog_item, list_catalog
 
 _SYSTEM = (
     "You are a careful purchasing agent. You are given a budget policy and a product catalog. "
@@ -98,7 +98,7 @@ async def agent_shop(connection: Connection, context: ExecutionContext, orchestr
             "storage_type": item["storage_type"],
             "description": item["description"],
         }
-        for item in list_products()
+        for item in list_catalog(connection, context)
     ]
     user = json.dumps(
         {
@@ -125,8 +125,8 @@ async def agent_shop(connection: Connection, context: ExecutionContext, orchestr
 
     sku = str(choice.get("sku", "")).strip()
     reasoning = str(choice.get("reasoning", "")).strip()
-    if not sku or get_product(sku) is None:
-        raise EngineError("agent_invalid_sku", "The agent chose a product that is not in the catalog.", 422)
+    if not sku or get_catalog_item(connection, context.organization_id, sku) is None:
+        raise EngineError("agent_invalid_sku", "The agent chose a product that is not in this workspace catalog.", 422)
 
     decision, evaluation_id, proposal_id = PolicyEngine().evaluate_sku(connection, context, policy_id, sku)
     return {

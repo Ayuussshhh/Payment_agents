@@ -57,7 +57,8 @@ Open http://localhost:3001. The page shows the engine name and version from `GET
 2. **Policies** — compile a plain-language rule, then activate the draft (ambiguous rules can't be activated).
 3. **Approvals** — evaluate a catalog SKU against the active policy, open an approval, and approve it.
 4. **Payments** — create a payment from the valid approval, then authorize and capture. A changed cart voids with `intent_mismatch` instead of capturing. Needs `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` in `.env`.
-5. **Agents** — create an agent, publish a version, and run it. Runs need a model key (`OPENAI_API_KEY`).
+5. **Catalog** — add workspace products yourself, or research a current item on the web and verify its fields before saving. Every save creates a revision; new workspaces start empty.
+6. **Agents** — start from a workflow template, select capabilities, a policy, and an ElevenLabs voice, then publish a version and run it. Runs need a model key (`OPENAI_API_KEY`). Web research uses `TAVILY_API_KEY`; voice preview and spoken responses use `ELEVENLABS_API_KEY`. Both keys stay in the engine environment. The agent can propose catalog SKUs, but policy evaluation remains deterministic and PayPal is never an agent tool.
 
 ## Tests
 

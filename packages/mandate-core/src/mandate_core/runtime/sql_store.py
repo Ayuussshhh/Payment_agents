@@ -55,7 +55,7 @@ class SqlRuntimeStore:
             text(
                 """
                 select id, agent_id, organization_id, version, provider, model, temperature,
-                       system_prompt, published_at, published_by
+                       system_prompt, skill_names, voice_id, published_at, published_by
                 from agents.agent_versions
                 where id = :id and organization_id = :organization_id
                 """
@@ -70,7 +70,7 @@ class SqlRuntimeStore:
             text(
                 """
                 select id, agent_id, organization_id, version, provider, model, temperature,
-                       system_prompt, published_at, published_by
+                       system_prompt, skill_names, voice_id, published_at, published_by
                 from agents.agent_versions
                 where organization_id = :organization_id and agent_id = :agent_id
                 order by version desc
@@ -147,6 +147,9 @@ class SqlRuntimeStore:
 
 
 def _version(row) -> AgentVersion:
+    skill_names = row.get("skill_names") or []
+    if isinstance(skill_names, str):
+        skill_names = json.loads(skill_names)
     return AgentVersion(
         id=row["id"],
         agent_id=row["agent_id"],
@@ -154,6 +157,8 @@ def _version(row) -> AgentVersion:
         version=row["version"],
         model=ModelRef(provider=row["provider"], model=row["model"], temperature=row["temperature"]),
         system_prompt=row["system_prompt"],
+        skill_names=tuple(skill_names),
+        voice_id=row.get("voice_id"),
         published_at=row["published_at"],
         published_by=row["published_by"],
     )
