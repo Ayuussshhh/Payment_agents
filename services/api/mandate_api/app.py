@@ -14,14 +14,16 @@ from sqlalchemy.engine import Engine
 
 from mandate_core import __version__
 from mandate_core.settings import database_url as configured_database_url
+from mandate_core.settings import model_configured, model_name, model_provider
+from mandate_core.contracts.models import ModelRef
 from mandate_core.errors import EngineError
 from mandate_core.identity import resolve_execution_context
 from mandate_core.approval import ApprovalEngine
-from mandate_core.policy import PolicyEngine
-from mandate_core.models import default_registry
+from mandate_core.policy import ModelDrafter, PolicyEngine
+from mandate_core.models import SqlUsage, default_registry
 from mandate_core.skills import SkillRuntime
 from mandate_core.persistence.agents import AgentRepository
-from mandate_core.runtime import AgentRuntime
+from mandate_core.runtime import AgentRuntime, OrchestratedModel
 from mandate_core.runtime.sql_store import SqlRuntimeStore
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -64,6 +66,11 @@ class VersionIn(BaseModel):
     provider: str
     model: str
     temperature: float = 0
+
+
+class RunIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input: dict = Field(default_factory=dict)
 
 
 class PolicyIn(BaseModel):
@@ -118,6 +125,8 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
     app.state.engine = engine
     app.state.redis = redis_client
     app.state.checkpointer = InMemorySaver()
+    app.state.registry = default_registry()
+    app.state.model_ref = ModelRef(provider=model_provider(), model=model_name())
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
@@ -252,11 +261,15 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
         return {"version": published.model_dump(mode="json")}
 
     def runtime_for(connection):
-        return AgentRuntime(SqlRuntimeStore(connection), app.state.checkpointer)
+        def model_factory(context, run, version):
+            return OrchestratedModel(app.state.registry, context, version, run.id, SqlUsage(connection))
+
+        return AgentRuntime(SqlRuntimeStore(connection), app.state.checkpointer, model_factory=model_factory)
 
     @app.post("/v1/agents/{agent_id}/runs")
-    async def start_run(agent_id: UUID, request: Request):
+    async def start_run(agent_id: UUID, request: Request, body: RunIn | None = None):
         token = require_session(request)
+        run_input = body.input if body is not None else {}
         with app.state.engine.begin() as connection:
             resolved = resolve_execution_context(
                 connection,
@@ -264,7 +277,7 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 organization_id=None,
                 request_id=request.state.request_id,
             )
-            run = await runtime_for(connection).create_run(resolved, agent_id, None, {})
+            run = await runtime_for(connection).create_run(resolved, agent_id, None, run_input)
         return {"run": run.model_dump(mode="json")}
 
     @app.post("/v1/runs/{run_id}/resume")
@@ -314,6 +327,11 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
             raise EngineError("idempotency_key_required", "An Idempotency-Key header is required.", 400)
         return key
 
+    def policy_drafter():
+        if not model_configured():
+            return None
+        return ModelDrafter(app.state.registry, app.state.model_ref)
+
     @app.post("/v1/policies")
     def create_policy(body: PolicyIn, request: Request, organization_id: UUID | None = Query(default=None)):
         token = require_session(request)
@@ -324,7 +342,7 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
                 organization_id=organization_id,
                 request_id=request.state.request_id,
             )
-            created = policies.create_draft(connection, resolved, body.instruction)
+            created = policies.create_draft(connection, resolved, body.instruction, drafter=policy_drafter())
         return {"policy": created.model_dump(mode="json")}
 
     @app.get("/v1/policies")

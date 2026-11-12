@@ -18,6 +18,24 @@ def load_env() -> None:
         return
 
 
+def model_provider() -> str:
+    """The provider name an agent version uses when none is given. One name, one adapter."""
+    load_env()
+    return os.environ.get("MODEL_PROVIDER", "openai").strip() or "openai"
+
+
+def model_name() -> str:
+    """The default model id, e.g. the one the policy drafter calls."""
+    load_env()
+    return os.environ.get("MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+
+def model_configured() -> bool:
+    """True when a key is present, so callers can skip the model instead of failing."""
+    load_env()
+    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
 def database_url() -> str:
     load_env()
     url = os.environ.get("DATABASE_URL", "").strip()

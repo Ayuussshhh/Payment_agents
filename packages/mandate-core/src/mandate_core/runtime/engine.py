@@ -17,11 +17,12 @@ STATUS = {
 
 
 class AgentRuntime:
-    def __init__(self, store: MemoryRuntimeStore, checkpointer, skills: SkillPort | None = None, events: EventLog | None = None):
+    def __init__(self, store: MemoryRuntimeStore, checkpointer, skills: SkillPort | None = None, events: EventLog | None = None, model_factory=None):
         self.store = store
         self.checkpointer = checkpointer
         self.skills = skills or SkillPort()
         self.events = events or EventLog()
+        self.model_factory = model_factory
         self.graphs = {
             "buyer": graph_factory("buyer", (), checkpointer).graph,
             "compiler": graph_factory("compiler", (), checkpointer).graph,
@@ -107,6 +108,13 @@ class AgentRuntime:
     def _config(self, run_id: UUID) -> dict:
         return {"configurable": {"thread_id": str(run_id)}}
 
+    def _resolve_model(self, context: ExecutionContext, run: AgentRun, version, model: ModelPort | None) -> ModelPort:
+        if model is not None:
+            return model
+        if self.model_factory is not None:
+            return self.model_factory(context, run, version)
+        raise EngineError("model_unavailable", "No model is configured for this run.", 503)
+
     def _context(self, context: ExecutionContext, run: AgentRun, version, model: ModelPort | None) -> GraphContext:
         names = self.store.names_for(version.id)
         kind = self.store.kind_for(version.agent_id)
@@ -123,7 +131,7 @@ class AgentRuntime:
             system_prompt=version.system_prompt,
             limits=context.limits,
             cancel_requested=run.cancel_requested,
-            model=model or _FinishedModel(),
+            model=self._resolve_model(context, run, version, model),
             events=self.events,
         )
 
@@ -155,10 +163,3 @@ def _plain_trace(item) -> dict:
     if isinstance(item, dict):
         return {"agent": item.get("agent", "buyer"), "text": item.get("text", "")}
     return {"agent": "buyer", "text": str(item)}
-
-
-class _FinishedModel(ModelPort):
-    def complete(self, messages, tools, prompt):
-        from mandate_core.models.types import ModelResponse
-
-        return ModelResponse(provider="static", model="static", content="done")

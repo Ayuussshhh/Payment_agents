@@ -1,7 +1,7 @@
 """Looks up a provider by the name stored on an agent version."""
 
 from mandate_core.errors import EngineError
-from mandate_core.models.providers import ModelProvider, OpenAIProvider, StaticProvider
+from mandate_core.models.providers import ModelProvider, OpenAIProvider
 from mandate_core.models.types import ModelCapabilities
 
 
@@ -28,7 +28,7 @@ class ProviderRegistry:
 
 
 def default_registry() -> ProviderRegistry:
+    """The providers a live process offers. No fake provider is listed here."""
     registry = ProviderRegistry()
-    registry.register(StaticProvider())
     registry.register(OpenAIProvider())
     return registry

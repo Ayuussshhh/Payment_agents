@@ -66,7 +66,7 @@ def _default_openai_capabilities(model: str) -> ModelCapabilities:
 
 
 class StaticProvider:
-    """Deterministic provider for tests and for switching without a live key."""
+    """Deterministic provider for tests only. It is not registered in a live process."""
 
     def __init__(
         self,
