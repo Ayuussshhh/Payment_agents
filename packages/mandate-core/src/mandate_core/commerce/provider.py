@@ -64,6 +64,7 @@ class ProviderResult:
     provider_order_id: str | None = None
     provider_authorization_id: str | None = None
     provider_capture_id: str | None = None
+    approval_url: str | None = None
     raw: dict = field(default_factory=dict)
 
 

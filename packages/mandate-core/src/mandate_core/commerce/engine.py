@@ -48,7 +48,7 @@ _TXN = text(
     """
     select id, organization_id, proposal_id, approval_id, policy_version_id, cart_hash,
            amount_minor, currency, status, provider, provider_order_id, provider_authorization_id,
-           provider_capture_id, reason_code, idempotency_key, created_at, updated_at
+           provider_capture_id, provider_approval_url, reason_code, idempotency_key, created_at, updated_at
     from commerce.transactions
     where organization_id = :organization_id and id = :transaction_id
     """
@@ -68,6 +68,7 @@ _UPDATE_TXN = text(
         provider_order_id = coalesce(:provider_order_id, provider_order_id),
         provider_authorization_id = coalesce(:provider_authorization_id, provider_authorization_id),
         provider_capture_id = coalesce(:provider_capture_id, provider_capture_id),
+        provider_approval_url = coalesce(:provider_approval_url, provider_approval_url),
         reason_code = :reason_code,
         updated_at = now()
     where organization_id = :organization_id and id = :transaction_id
@@ -184,6 +185,7 @@ def _transaction(row) -> Transaction:
         provider_order_id=row["provider_order_id"],
         provider_authorization_id=row["provider_authorization_id"],
         provider_capture_id=row["provider_capture_id"],
+        provider_approval_url=row["provider_approval_url"],
         reason_code=row["reason_code"],
         idempotency_key=row["idempotency_key"],
         created_at=row["created_at"],
@@ -298,7 +300,7 @@ class CommerceEngine:
         result, outcome = await self._attempt(self.provider.create_order(command))
         self._record(connection, transaction_id, "create", str(transaction_id), result, outcome)
         if outcome == "ok":
-            self._set(connection, context, transaction_id, "reserved", provider_order_id=result.provider_order_id)
+            self._set(connection, context, transaction_id, "reserved", provider_order_id=result.provider_order_id, provider_approval_url=result.approval_url)
             self._emit(connection, context, "commerce.order.created", transaction_id, {"amount_minor": amount})
         elif outcome == "timeout":
             self._set(connection, context, transaction_id, "unknown", reason_code="provider_timeout")
@@ -415,7 +417,7 @@ class CommerceEngine:
             raise EngineError("not_found", "That payment does not exist.", 404)
         return row
 
-    def _set(self, connection, context, transaction_id, status, provider_order_id=None, provider_authorization_id=None, provider_capture_id=None, reason_code=""):
+    def _set(self, connection, context, transaction_id, status, provider_order_id=None, provider_authorization_id=None, provider_capture_id=None, provider_approval_url=None, reason_code=""):
         connection.execute(
             _UPDATE_TXN,
             {
@@ -425,6 +427,7 @@ class CommerceEngine:
                 "provider_order_id": provider_order_id,
                 "provider_authorization_id": provider_authorization_id,
                 "provider_capture_id": provider_capture_id,
+                "provider_approval_url": provider_approval_url,
                 "reason_code": reason_code,
             },
         )

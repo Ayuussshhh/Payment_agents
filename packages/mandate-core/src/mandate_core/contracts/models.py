@@ -214,6 +214,7 @@ class Transaction(ContractModel):
     provider_order_id: str | None = None
     provider_authorization_id: str | None = None
     provider_capture_id: str | None = None
+    provider_approval_url: str | None = None
     reason_code: str = ""
     idempotency_key: str
     created_at: datetime | None = None

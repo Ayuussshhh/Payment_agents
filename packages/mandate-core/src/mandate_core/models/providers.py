@@ -172,5 +172,12 @@ class OpenAIProvider:
             stream,
         )
         if result.status >= 400:
-            raise EngineError("provider_error", "The model provider rejected the request.", 502)
+            detail = ""
+            try:
+                error = result.body.get("error") if isinstance(result.body, dict) else None
+                detail = str((error or {}).get("message") or result.body)[:200]
+            except Exception:
+                detail = ""
+            suffix = f": {detail}" if detail else "."
+            raise EngineError("provider_error", f"The model provider rejected the request (status {result.status}){suffix}", 502)
         return result

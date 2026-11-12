@@ -35,13 +35,14 @@ def _env() -> str:
 class PayPalProvider:
     name = "paypal"
 
-    def __init__(self, client_id: str | None = None, client_secret: str | None = None, webhook_id: str | None = None, base_url: str | None = None):
+    def __init__(self, client_id: str | None = None, client_secret: str | None = None, webhook_id: str | None = None, base_url: str | None = None, studio_url: str | None = None):
         if _env() == "live":
             raise EngineError("provider_live_refused", "PayPal live mode is refused in this release.", 400)
         self.client_id = client_id if client_id is not None else os.environ.get("PAYPAL_CLIENT_ID", "")
         self.client_secret = client_secret if client_secret is not None else os.environ.get("PAYPAL_CLIENT_SECRET", "")
         self.webhook_id = webhook_id if webhook_id is not None else os.environ.get("PAYPAL_WEBHOOK_ID", "")
         self.base_url = (base_url or _SANDBOX).rstrip("/")
+        self.studio_url = (studio_url or os.environ.get("STUDIO_URL") or "http://localhost:3001").rstrip("/")
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(separate_authorization=True, refunds=True)
@@ -68,8 +69,8 @@ class PayPalProvider:
 
     async def create_order(self, command: CreateOrder) -> ProviderResult:
         # No payee is sent: in sandbox the order settles to the credentialed
-        # account. A real marketplace payee (merchant_id) is a later, verified
-        # onboarding step, not an arbitrary string from the catalog.
+        # account. application_context carries the URLs PayPal redirects the buyer
+        # to after they approve or cancel the order in the PayPal-hosted checkout.
         body = {
             "intent": "AUTHORIZE",
             "purchase_units": [
@@ -78,6 +79,13 @@ class PayPalProvider:
                     "amount": {"currency_code": command.currency, "value": minor_to_decimal(command.amount_minor)},
                 }
             ],
+            "application_context": {
+                "brand_name": "Mandate",
+                "user_action": "CONTINUE",
+                "shipping_preference": "NO_SHIPPING",
+                "return_url": f"{self.studio_url}/checkout/return?tx={command.transaction_id}",
+                "cancel_url": f"{self.studio_url}/checkout/cancel?tx={command.transaction_id}",
+            },
         }
         async with httpx.AsyncClient(timeout=30) as client:
             token = await self._token(client)
@@ -85,7 +93,8 @@ class PayPalProvider:
         data = _json(response)
         if response.status_code >= 400:
             raise EngineError("provider_error", "PayPal refused the order.", 502)
-        return ProviderResult(status=data.get("status", "CREATED"), provider_order_id=data.get("id"), raw=_redact(data))
+        approval = next((link.get("href") for link in data.get("links", []) if link.get("rel") == "approve"), None)
+        return ProviderResult(status=data.get("status", "CREATED"), provider_order_id=data.get("id"), approval_url=approval, raw=_redact(data))
 
     async def authorize(self, command: AuthorizeOrder) -> ProviderResult:
         async with httpx.AsyncClient(timeout=30) as client:
