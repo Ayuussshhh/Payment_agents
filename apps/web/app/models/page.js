@@ -3,6 +3,14 @@
 import { useEffect, useState } from "react";
 import { getJson } from "../../lib/api";
 
+import Box from "@mui/material/Box";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Chip from "@mui/material/Chip";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import { Banner, PageHeader } from "../../components/ui";
+
 export default function Models() {
   const [providers, setProviders] = useState([]);
   const [error, setError] = useState("");
@@ -15,30 +23,27 @@ export default function Models() {
 
   return (
     <>
-      <header className="top">
-        <div>
-          <p className="eyebrow">Models</p>
-          <h1>One interface. The provider stays behind it.</h1>
-        </div>
-      </header>
-      {error ? <p className="banner">{error}</p> : null}
-      <div className="cards">
+      <PageHeader overline="Models" title="One interface. The provider stays behind it." />
+      <Banner>{error}</Banner>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 2 }}>
         {providers.map((provider) => (
-          <article className="card" key={provider.name}>
-            <div className="card-top">
-              <h2>{provider.name}</h2>
-              <span className="pill">{provider.model}</span>
-            </div>
-            <div className="chips">
-              {Object.entries(provider.capabilities || {})
-                .filter(([, value]) => value === true)
-                .map(([name]) => (
-                  <span key={name}>{name.replaceAll("_", " ")}</span>
-                ))}
-            </div>
-          </article>
+          <Card key={provider.name}>
+            <CardContent>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                <Typography variant="h5">{provider.name}</Typography>
+                <Chip size="small" color="primary" variant="outlined" label={provider.model} />
+              </Stack>
+              <Stack direction="row" flexWrap="wrap" gap={0.75} sx={{ mt: 1.5 }}>
+                {Object.entries(provider.capabilities || {})
+                  .filter(([, value]) => value === true)
+                  .map(([name]) => (
+                    <Chip key={name} size="small" label={name.replaceAll("_", " ")} />
+                  ))}
+              </Stack>
+            </CardContent>
+          </Card>
         ))}
-      </div>
+      </Box>
     </>
   );
 }

@@ -1,11 +1,48 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { apiGet, apiPost, idemKey } from "../lib/api";
+
+import Avatar from "@mui/material/Avatar";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Chip from "@mui/material/Chip";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import CheckIcon from "@mui/icons-material/Check";
+import { Banner, StatusChip, money as fmtMoney } from "../components/ui";
 
 const DEMO_POLICY =
   "Order a Dell laptop for the team. The total must not exceed $800, including tax and delivery. " +
   "At least 16 GB of RAM and a 512 GB SSD. No warranty and no accessories. Do not pay until I approve.";
+
+function money(minor, currency) {
+  if (minor == null) return "—";
+  return `$${(minor / 100).toFixed(2)} ${currency || "USD"}`;
+}
+function short(value) { return value ? `${value.slice(0, 12)}…` : "—"; }
+
+function Step({ n, title, done, locked, children }) {
+  return (
+    <Card sx={{ opacity: locked ? 0.5 : 1, pointerEvents: locked ? "none" : "auto", transition: "opacity .2s" }}>
+      <CardContent>
+        <Stack direction="row" spacing={2}>
+          <Avatar sx={{ width: 36, height: 36, fontWeight: 700, bgcolor: done ? "success.main" : "grey.200", color: done ? "#fff" : "text.secondary" }}>
+            {done ? <CheckIcon fontSize="small" /> : n}
+          </Avatar>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="h5" sx={{ mb: 1 }}>{title}</Typography>
+            {children}
+          </Box>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Checkout() {
   const [policy, setPolicy] = useState(null);
@@ -21,31 +58,20 @@ export default function Checkout() {
 
   const loadPolicy = useCallback(() => {
     apiGet("/v1/policies")
-      .then((data) => {
-        const active = (data.policies || []).find((row) => row.status === "active");
-        setPolicy(active || null);
-      })
+      .then((data) => setPolicy((data.policies || []).find((row) => row.status === "active") || null))
       .catch((caught) => setError(caught.message));
   }, []);
 
   useEffect(() => {
     loadPolicy();
-    apiGet("/v1/catalog")
-      .then((data) => setCatalogCount((data.catalog || []).length))
-      .catch(() => setCatalogCount(null));
+    apiGet("/v1/catalog").then((data) => setCatalogCount((data.catalog || []).length)).catch(() => setCatalogCount(null));
   }, [loadPolicy]);
 
   async function wrap(key, fn) {
-    setBusy(key);
-    setError("");
-    try {
-      return await fn();
-    } catch (caught) {
-      setError(caught.message);
-      throw caught;
-    } finally {
-      setBusy("");
-    }
+    setBusy(key); setError("");
+    try { return await fn(); }
+    catch (caught) { setError(caught.message); throw caught; }
+    finally { setBusy(""); }
   }
 
   async function createPolicy() {
@@ -57,15 +83,10 @@ export default function Checkout() {
   }
 
   async function runAgent() {
-    setChosen(null);
-    setDecision(null);
-    setApproval(null);
-    setPayment(null);
+    setChosen(null); setDecision(null); setApproval(null); setPayment(null);
     await wrap("agent", async () => {
       const body = await apiPost("/v1/agent/shop", { policy_id: policy.policy_id, goal });
-      setChosen(body.chosen);
-      setDecision(body.decision);
-      setProposalId(body.proposal_id);
+      setChosen(body.chosen); setDecision(body.decision); setProposalId(body.proposal_id);
     });
   }
 
@@ -81,119 +102,91 @@ export default function Checkout() {
     await wrap("pay", async () => {
       const body = await apiPost("/v1/payments", { proposal_id: proposalId, approval_id: approval.id }, { idempotencyKey: idemKey() });
       setPayment(body.payment);
-      if (body.payment?.provider_approval_url) {
-        window.location.href = body.payment.provider_approval_url;
-      } else {
-        setError("No PayPal approval link was returned. Check PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET.");
-      }
+      if (body.payment?.provider_approval_url) window.location.href = body.payment.provider_approval_url;
+      else setError("No PayPal approval link was returned. Check PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET.");
     });
   }
 
   return (
-    <>
-      <header className="hero">
-        <p className="eyebrow">Agentic checkout</p>
-        <h1>An agent shops. You approve. PayPal pays — only the approved cart.</h1>
-        <p className="lede">
+    <Box sx={{ maxWidth: 860 }}>
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="overline" color="primary">Agentic checkout</Typography>
+        <Typography variant="h1" sx={{ mt: 0.5, fontSize: { xs: "1.9rem", md: "2.4rem" }, maxWidth: "20ch" }}>
+          An agent shops. You approve. PayPal pays — only the approved cart.
+        </Typography>
+        <Typography variant="body1" color="text.secondary" sx={{ mt: 2, maxWidth: "64ch" }}>
           The model proposes a product within your budget policy. A deterministic engine decides and a human approves. PayPal is
           called last, for the exact cart that was approved — never by the model.
-        </p>
-      </header>
+        </Typography>
+      </Box>
 
-      {error ? <p className="banner">{error}</p> : null}
+      <Banner>{error}</Banner>
 
-      <Step n={1} title="Budget policy" done={Boolean(policy)}>
-        {policy ? (
-          <p className="meta">
-            Active policy · max <strong>{money(policy.maximum_total_minor, policy.currency)}</strong> · {policy.original_instruction}
-          </p>
-        ) : (
-          <>
-            <p className="meta">No active budget policy yet. Create the demo one to continue.</p>
-            <button className="btn btn-primary" onClick={createPolicy} disabled={busy === "policy"}>
-              {busy === "policy" ? "Creating…" : "Create demo budget policy"}
-            </button>
-          </>
-        )}
-      </Step>
-
-      <Step n={2} title="Let the agent shop" done={Boolean(chosen)} locked={!policy}>
-        <label className="field">
-          <span>Goal for the agent</span>
-          <textarea rows={2} value={goal} onChange={(event) => setGoal(event.target.value)} />
-        </label>
-        <p className="meta">
-          The agent reads {catalogCount != null ? <strong>{catalogCount} products</strong> : "the"} merchant catalog and the budget
-          policy, then proposes one SKU. It never sets a price. <a className="inline-link" href="/catalog">See the catalog →</a>
-        </p>
-        <button className="btn btn-primary" onClick={runAgent} disabled={!policy || busy === "agent"}>
-          {busy === "agent" ? "The agent is deciding…" : "Run agent"}
-        </button>
-        {chosen ? (
-          <div className="choice">
-            <div className="choice-head">
-              <span className="badge badge-active">chose {chosen.sku}</span>
-              <span className="meta">{chosen.model}</span>
-            </div>
-            <p className="reasoning">“{chosen.reasoning}”</p>
-            {decision ? (
-              <div className="decision">
-                <span className={`badge badge-${decision.decision}`}>{decision.decision.replace("_", " ")}</span>
-                <span className="meta">{money(decision.evaluated_amount_minor, decision.currency)}</span>
-                {(decision.reason_codes || []).map((code) => (
-                  <span key={code} className="chip">
-                    {code}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </Step>
-
-      <Step n={3} title="Approve the cart" done={approval?.status === "valid"} locked={decision?.decision !== "needs_approval"}>
-        {decision?.decision === "needs_approval" ? (
-          approval?.status === "valid" ? (
-            <p className="meta">
-              Approved · bound to cart <span className="mono">{short(approval.cart_hash)}</span>. A changed line would void this.
-            </p>
+      <Stack spacing={2}>
+        <Step n={1} title="Budget policy" done={Boolean(policy)}>
+          {policy ? (
+            <Typography variant="body2" color="text.secondary">
+              Active policy · max <b>{money(policy.maximum_total_minor, policy.currency)}</b> · {policy.original_instruction}
+            </Typography>
           ) : (
-            <button className="btn btn-primary" onClick={approve} disabled={busy === "approve"}>
-              {busy === "approve" ? "Signing…" : "Approve this cart"}
-            </button>
-          )
-        ) : (
-          <p className="meta">The agent’s proposal needs a human approval before any payment.</p>
-        )}
-      </Step>
+            <>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>No active budget policy yet. Create the demo one to continue.</Typography>
+              <Button variant="contained" onClick={createPolicy} disabled={busy === "policy"}>{busy === "policy" ? "Creating…" : "Create demo budget policy"}</Button>
+            </>
+          )}
+        </Step>
 
-      <Step n={4} title="Pay with PayPal" done={false} locked={approval?.status !== "valid"}>
-        <p className="meta">Creates a PayPal order for the approved amount and sends you to PayPal to approve it (sandbox).</p>
-        <button className="btn btn-paypal" onClick={pay} disabled={approval?.status !== "valid" || busy === "pay"}>
-          {busy === "pay" ? "Creating order…" : "Pay with PayPal"}
-        </button>
-      </Step>
-    </>
+        <Step n={2} title="Let the agent shop" done={Boolean(chosen)} locked={!policy}>
+          <TextField label="Goal for the agent" value={goal} onChange={(e) => setGoal(e.target.value)} multiline rows={2} fullWidth size="small" sx={{ mb: 1.5 }} />
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            The agent reads {catalogCount != null ? <b>{catalogCount} products</b> : "the"} merchant catalog and the budget policy, then proposes one SKU. It never sets a price.{" "}
+            <Box component={Link} href="/catalog" sx={{ color: "primary.main", fontWeight: 600 }}>See the catalog →</Box>
+          </Typography>
+          <Button variant="contained" onClick={runAgent} disabled={!policy || busy === "agent"}>{busy === "agent" ? "The agent is deciding…" : "Run agent"}</Button>
+          {chosen ? (
+            <Box sx={{ mt: 2, p: 2, borderRadius: 2, border: "1px solid", borderColor: "primary.light", bgcolor: "rgba(20,83,116,0.04)" }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                <Chip size="small" color="success" label={`chose ${chosen.sku}`} />
+                <Typography variant="body2" color="text.secondary">{chosen.model}</Typography>
+              </Stack>
+              <Typography sx={{ mt: 1.5, fontStyle: "italic", lineHeight: 1.6 }}>“{chosen.reasoning}”</Typography>
+              {decision ? (
+                <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} sx={{ mt: 1.5, pt: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+                  <StatusChip status={decision.decision} />
+                  <Typography variant="body2" color="text.secondary">{money(decision.evaluated_amount_minor, decision.currency)}</Typography>
+                  {(decision.reason_codes || []).map((code) => <Chip key={code} size="small" variant="outlined" label={code} />)}
+                </Stack>
+              ) : null}
+            </Box>
+          ) : null}
+        </Step>
+
+        <Step n={3} title="Approve the cart" done={approval?.status === "valid"} locked={decision?.decision !== "needs_approval"}>
+          {decision?.decision === "needs_approval" ? (
+            approval?.status === "valid" ? (
+              <Typography variant="body2" color="text.secondary">
+                Approved · bound to cart <Box component="span" sx={{ fontFamily: "ui-monospace, monospace" }}>{short(approval.cart_hash)}</Box>. A changed line would void this.
+              </Typography>
+            ) : (
+              <Button variant="contained" onClick={approve} disabled={busy === "approve"}>{busy === "approve" ? "Signing…" : "Approve this cart"}</Button>
+            )
+          ) : (
+            <Typography variant="body2" color="text.secondary">The agent’s proposal needs a human approval before any payment.</Typography>
+          )}
+        </Step>
+
+        <Step n={4} title="Pay with PayPal" done={false} locked={approval?.status !== "valid"}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>Creates a PayPal order for the approved amount and sends you to PayPal to approve it (sandbox).</Typography>
+          <Button
+            variant="contained"
+            onClick={pay}
+            disabled={approval?.status !== "valid" || busy === "pay"}
+            sx={{ background: "linear-gradient(135deg, #003087, #0070e0)" }}
+          >
+            {busy === "pay" ? "Creating order…" : "Pay with PayPal"}
+          </Button>
+        </Step>
+      </Stack>
+    </Box>
   );
-}
-
-function Step({ n, title, children, done, locked }) {
-  return (
-    <section className={`step${locked ? " step-locked" : ""}`}>
-      <div className={`step-num${done ? " step-done" : ""}`}>{done ? "✓" : n}</div>
-      <div className="step-body">
-        <h2>{title}</h2>
-        {children}
-      </div>
-    </section>
-  );
-}
-
-function money(minor, currency) {
-  if (minor == null) return "—";
-  return `$${(minor / 100).toFixed(2)} ${currency || "USD"}`;
-}
-
-function short(value) {
-  return value ? `${value.slice(0, 12)}…` : "—";
 }

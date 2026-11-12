@@ -3,7 +3,35 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../../lib/api";
 
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Chip from "@mui/material/Chip";
+import MenuItem from "@mui/material/MenuItem";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import { Banner, PageHeader, money } from "../../components/ui";
+
 const EMPTY = { sku: "", name: "", brand: "", category: "", description: "", currency: "USD", unit_amount_minor: "", ram_gb: "", storage_gb: "", storage_type: "", source_url: "" };
+
+function Kicker({ n, title, subtitle, action }) {
+  return (
+    <Stack direction="row" alignItems="flex-start" spacing={1.25} sx={{ mb: 2 }}>
+      <Box sx={{ width: 28, height: 28, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", bgcolor: "primary.main", color: "#fff", fontSize: "0.72rem", fontWeight: 700 }}>{n}</Box>
+      <Box sx={{ flex: 1 }}>
+        <Typography variant="h5">{title}</Typography>
+        {subtitle ? <Typography variant="caption" color="text.secondary">{subtitle}</Typography> : null}
+      </Box>
+      {action}
+    </Stack>
+  );
+}
 
 export default function Catalog() {
   const [items, setItems] = useState([]);
@@ -18,7 +46,6 @@ export default function Catalog() {
     try { const body = await apiGet("/v1/catalog"); setItems(body.catalog || []); setError(""); }
     catch (caught) { setError(caught.message); }
   }, []);
-
   useEffect(() => { load(); }, [load]);
 
   function setField(key, value) { setForm((current) => ({ ...current, [key]: value })); }
@@ -64,48 +91,132 @@ export default function Catalog() {
   }
 
   return (
-    <main className="studio-page catalog-studio">
-      <header className="page-heading">
-        <div><p className="eyebrow">Merchant data <span className="eyebrow-dot" /> Workspace catalog</p><h1>Your catalog. Your prices. Every change has a version.</h1><p className="lede">Start with an empty workspace. Research a real item on the web, verify its details, then add it to the catalog. Only saved catalog values can enter a proposal.</p></div>
-        <div className="heading-status"><span className="status-indicator" /> {items.length} active item{items.length === 1 ? "" : "s"}</div>
-      </header>
-      {error ? <p className="banner" role="alert">{error}</p> : null}
+    <>
+      <PageHeader
+        overline="Merchant data · Workspace catalog"
+        title="Your catalog. Your prices. Every change has a version."
+        subtitle="Start with an empty workspace. Research a real item on the web, verify its details, then add it to the catalog. Only saved catalog values can enter a proposal."
+        action={<Chip color="success" variant="outlined" label={`${items.length} active item${items.length === 1 ? "" : "s"}`} />}
+      />
+      <Banner>{error}</Banner>
 
-      <section className="catalog-workspace">
-        <div className="catalog-main">
-          <section className="panel catalog-research">
-            <div className="section-kicker"><span>01</span><div><h2>Research from the web</h2><p>Live search results with source links. Nothing is imported until you review it.</p></div></div>
-            <form className="inline-form research-form" onSubmit={searchWeb}><label className="field"><span>Search query</span><input value={researchQuery} onChange={(event) => setResearchQuery(event.target.value)} placeholder="Brand, product name, or model number" required maxLength={300} /></label><button className="btn btn-primary" disabled={busy === "research" || !researchQuery.trim()}>{busy === "research" ? "Searching…" : "Search web"}</button></form>
-            {research.length ? <div className="research-results">{research.map((source, index) => <article className="research-result" key={`${source.url}-${index}`}><div><strong>{source.title || "Web result"}</strong><p>{source.content}</p><a href={source.url} target="_blank" rel="noreferrer">Open original source ↗</a></div><button className="btn" onClick={() => useResearchResult(source)}>Review item</button></article>)}</div> : null}
-          </section>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0,1.5fr) minmax(0,0.95fr)" }, gap: 2, alignItems: "start" }}>
+        <Stack spacing={2}>
+          <Card>
+            <CardContent>
+              <Kicker n="01" title="Research from the web" subtitle="Live search results with source links. Nothing is imported until you review it." />
+              <Stack component="form" onSubmit={searchWeb} direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "flex-end" }}>
+                <TextField label="Search query" value={researchQuery} onChange={(e) => setResearchQuery(e.target.value)} placeholder="Brand, product name, or model number" required inputProps={{ maxLength: 300 }} size="small" sx={{ flex: 1 }} />
+                <Button type="submit" variant="contained" disabled={busy === "research" || !researchQuery.trim()}>{busy === "research" ? "Searching…" : "Search web"}</Button>
+              </Stack>
+              {research.length ? (
+                <Stack spacing={1.5} sx={{ mt: 2 }}>
+                  {research.map((source, index) => (
+                    <Stack key={`${source.url}-${index}`} direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 2 }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{source.title || "Web result"}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", my: 0.5 }}>{source.content}</Typography>
+                        <Box component="a" href={source.url} target="_blank" rel="noreferrer" sx={{ color: "primary.main", fontSize: "0.78rem" }}>Open original source ↗</Box>
+                      </Box>
+                      <Button size="small" variant="outlined" onClick={() => useResearchResult(source)}>Review item</Button>
+                    </Stack>
+                  ))}
+                </Stack>
+              ) : null}
+            </CardContent>
+          </Card>
 
-          <section className="panel" id="catalog-editor">
-            <div className="section-kicker"><span>02</span><div><h2>{form.sku ? `Edit ${form.sku}` : "Add a verified catalog item"}</h2><p>Set the price and specifications you are willing to sell at. Web snippets never set them for you.</p></div>{form.sku ? <button className="link-button" type="button" onClick={() => setForm(EMPTY)}>Cancel edit</button> : null}</div>
-            <form onSubmit={save} className="catalog-form">
-              <label className="field"><span>SKU</span><input value={form.sku || form.skuDraft || ""} onChange={(event) => form.sku ? null : setField("skuDraft", event.target.value.toUpperCase())} disabled={Boolean(form.sku)} required maxLength={80} placeholder="A unique merchant SKU" /></label>
-              <label className="field"><span>Product name</span><input value={form.name} onChange={(event) => setField("name", event.target.value)} required maxLength={160} /></label>
-              <label className="field"><span>Brand</span><input value={form.brand} onChange={(event) => setField("brand", event.target.value)} required maxLength={100} /></label>
-              <label className="field"><span>Category</span><input value={form.category} onChange={(event) => setField("category", event.target.value)} maxLength={100} placeholder="e.g. laptop" /></label>
-              <label className="field"><span>Price</span><div className="money-input"><input type="number" step="0.01" min="0.01" value={form.unit_amount_minor} onChange={(event) => setField("unit_amount_minor", event.target.value)} required /><select value={form.currency} onChange={(event) => setField("currency", event.target.value)}><option>USD</option><option>INR</option><option>EUR</option><option>GBP</option></select></div></label>
-              <label className="field"><span>RAM (GB)</span><input type="number" min="1" value={form.ram_gb} onChange={(event) => setField("ram_gb", event.target.value)} /></label>
-              <label className="field"><span>Storage (GB)</span><input type="number" min="1" value={form.storage_gb} onChange={(event) => setField("storage_gb", event.target.value)} /></label>
-              <label className="field"><span>Storage type</span><input value={form.storage_type} onChange={(event) => setField("storage_type", event.target.value)} placeholder="SSD" /></label>
-              <label className="field field-wide"><span>Description</span><textarea rows={3} value={form.description} onChange={(event) => setField("description", event.target.value)} maxLength={2000} /></label>
-              <label className="field field-wide"><span>Source URL <small>Optional, kept for audit</small></span><input type="url" value={form.source_url} onChange={(event) => setField("source_url", event.target.value)} placeholder="https://…" maxLength={2000} /></label>
-              <div className="field-wide"><button className="btn btn-primary" disabled={busy === "save"}>{busy === "save" ? "Saving revision…" : form.sku ? "Save new revision" : "Add to catalog"}</button></div>
-            </form>
-          </section>
-        </div>
+          <Card id="catalog-editor">
+            <CardContent>
+              <Kicker
+                n="02"
+                title={form.sku ? `Edit ${form.sku}` : "Add a verified catalog item"}
+                subtitle="Set the price and specifications you are willing to sell at. Web snippets never set them for you."
+                action={form.sku ? <Button size="small" onClick={() => setForm(EMPTY)}>Cancel edit</Button> : null}
+              />
+              <Box component="form" onSubmit={save} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2 }}>
+                <TextField label="SKU" value={form.sku || form.skuDraft || ""} onChange={(e) => (form.sku ? null : setField("skuDraft", e.target.value.toUpperCase()))} disabled={Boolean(form.sku)} required inputProps={{ maxLength: 80 }} placeholder="A unique merchant SKU" size="small" />
+                <TextField label="Product name" value={form.name} onChange={(e) => setField("name", e.target.value)} required inputProps={{ maxLength: 160 }} size="small" />
+                <TextField label="Brand" value={form.brand} onChange={(e) => setField("brand", e.target.value)} required inputProps={{ maxLength: 100 }} size="small" />
+                <TextField label="Category" value={form.category} onChange={(e) => setField("category", e.target.value)} inputProps={{ maxLength: 100 }} placeholder="e.g. laptop" size="small" />
+                <Stack direction="row" spacing={1}>
+                  <TextField label="Price" type="number" inputProps={{ step: "0.01", min: "0.01" }} value={form.unit_amount_minor} onChange={(e) => setField("unit_amount_minor", e.target.value)} required size="small" sx={{ flex: 1 }} />
+                  <TextField select label="Currency" value={form.currency} onChange={(e) => setField("currency", e.target.value)} size="small" sx={{ width: 110 }}>
+                    {["USD", "INR", "EUR", "GBP"].map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+                  </TextField>
+                </Stack>
+                <TextField label="RAM (GB)" type="number" inputProps={{ min: "1" }} value={form.ram_gb} onChange={(e) => setField("ram_gb", e.target.value)} size="small" />
+                <TextField label="Storage (GB)" type="number" inputProps={{ min: "1" }} value={form.storage_gb} onChange={(e) => setField("storage_gb", e.target.value)} size="small" />
+                <TextField label="Storage type" value={form.storage_type} onChange={(e) => setField("storage_type", e.target.value)} placeholder="SSD" size="small" />
+                <TextField label="Description" value={form.description} onChange={(e) => setField("description", e.target.value)} inputProps={{ maxLength: 2000 }} multiline rows={3} size="small" sx={{ gridColumn: "1 / -1" }} />
+                <TextField label="Source URL (optional, kept for audit)" type="url" value={form.source_url} onChange={(e) => setField("source_url", e.target.value)} placeholder="https://…" inputProps={{ maxLength: 2000 }} size="small" sx={{ gridColumn: "1 / -1" }} />
+                <Box sx={{ gridColumn: "1 / -1" }}>
+                  <Button type="submit" variant="contained" disabled={busy === "save"}>{busy === "save" ? "Saving revision…" : form.sku ? "Save new revision" : "Add to catalog"}</Button>
+                </Box>
+              </Box>
+            </CardContent>
+          </Card>
+        </Stack>
 
-        <aside className="catalog-aside">
-          <section className="panel catalog-items-panel"><div className="section-kicker"><span>03</span><div><h2>Live catalog</h2><p>Items available to your agent.</p></div><button className="link-button" onClick={load}>Refresh</button></div>
-            {items.length ? <div className="catalog-items">{items.map((item) => <article className="catalog-item" key={item.sku}><div className="catalog-item-title"><div><strong>{item.name}</strong><small>{item.brand} · {item.sku} · v{item.version}</small></div><span>{money(item.unit_amount_minor, item.currency)}</span></div><div className="chips">{item.category ? <span className="chip">{item.category}</span> : null}{item.ram_gb ? <span className="chip">{item.ram_gb} GB RAM</span> : null}{item.storage_gb ? <span className="chip">{item.storage_gb} GB {item.storage_type || "storage"}</span> : null}</div><div className="catalog-item-actions"><button className="link-button" onClick={() => showHistory(item.sku)}>Version history</button><button className="link-button" onClick={() => setForm({ ...item, unit_amount_minor: (item.unit_amount_minor / 100).toFixed(2), skuDraft: "" })}>Edit</button><button className="link-button danger-link" onClick={() => archive(item.sku)}>Archive</button></div></article>)}</div> : <div className="catalog-empty"><span>⌕</span><h3>No catalog items yet</h3><p>Your workspace starts empty. Search the web or add a verified item to make it available to agents.</p></div>}
-          </section>
-          {history ? <section className="panel catalog-history"><div className="section-kicker"><div><h2>{history.sku} revisions</h2><p>Immutable item snapshots.</p></div><button className="link-button" onClick={() => setHistory(null)}>Close</button></div>{history.versions.map((version) => <details className="history-revision" key={version.version}><summary><span>Version {version.version}</span><time>{version.created_at ? new Date(version.created_at).toLocaleString() : ""}</time></summary><pre>{JSON.stringify(version.snapshot, null, 2)}</pre></details>)}</section> : null}
-        </aside>
-      </section>
-    </main>
+        <Stack spacing={2}>
+          <Card>
+            <CardContent>
+              <Kicker n="03" title="Live catalog" subtitle="Items available to your agent." action={<Button size="small" onClick={load}>Refresh</Button>} />
+              {items.length ? (
+                <Stack spacing={1.5}>
+                  {items.map((item) => (
+                    <Box key={item.sku} sx={{ p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 2 }}>
+                      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.name}</Typography>
+                          <Typography variant="caption" color="text.secondary">{item.brand} · {item.sku} · v{item.version}</Typography>
+                        </Box>
+                        <Typography sx={{ fontWeight: 700, whiteSpace: "nowrap" }}>{money(item.unit_amount_minor, item.currency)}</Typography>
+                      </Stack>
+                      <Stack direction="row" flexWrap="wrap" gap={0.75} sx={{ my: 1 }}>
+                        {item.category ? <Chip size="small" label={item.category} /> : null}
+                        {item.ram_gb ? <Chip size="small" label={`${item.ram_gb} GB RAM`} /> : null}
+                        {item.storage_gb ? <Chip size="small" label={`${item.storage_gb} GB ${item.storage_type || "storage"}`} /> : null}
+                      </Stack>
+                      <Stack direction="row" flexWrap="wrap" gap={1.5} sx={{ pt: 1, borderTop: "1px solid", borderColor: "divider" }}>
+                        <Button size="small" onClick={() => showHistory(item.sku)}>Version history</Button>
+                        <Button size="small" onClick={() => setForm({ ...item, unit_amount_minor: (item.unit_amount_minor / 100).toFixed(2), skuDraft: "" })}>Edit</Button>
+                        <Button size="small" color="error" onClick={() => archive(item.sku)}>Archive</Button>
+                      </Stack>
+                    </Box>
+                  ))}
+                </Stack>
+              ) : (
+                <Box sx={{ textAlign: "center", py: 3 }}>
+                  <Typography variant="h6">No catalog items yet</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Your workspace starts empty. Search the web or add a verified item to make it available to agents.</Typography>
+                </Box>
+              )}
+            </CardContent>
+          </Card>
+
+          {history ? (
+            <Card>
+              <CardContent>
+                <Kicker title={`${history.sku} revisions`} subtitle="Immutable item snapshots." action={<Button size="small" onClick={() => setHistory(null)}>Close</Button>} />
+                {history.versions.map((version) => (
+                  <Accordion key={version.version} elevation={0} disableGutters sx={{ border: "1px solid", borderColor: "divider", borderRadius: 2, mb: 1, "&:before": { display: "none" } }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="body2" sx={{ flex: 1 }}>Version {version.version}</Typography>
+                      <Typography variant="caption" color="text.secondary">{version.created_at ? new Date(version.created_at).toLocaleString() : ""}</Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 320, overflow: "auto", borderRadius: 1.5, bgcolor: "grey.50", fontSize: "0.72rem", fontFamily: "ui-monospace, monospace" }}>
+                        {JSON.stringify(version.snapshot, null, 2)}
+                      </Box>
+                    </AccordionDetails>
+                  </Accordion>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+        </Stack>
+      </Box>
+    </>
   );
 }
-
-function money(minor, currency = "USD") { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format((minor || 0) / 100); }

@@ -3,6 +3,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost } from "../../lib/api";
 
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import CardHeader from "@mui/material/CardHeader";
+import Stack from "@mui/material/Stack";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { Banner, PageHeader, StatusChip } from "../../components/ui";
+
+const MONO = { fontFamily: "ui-monospace, monospace" };
+
 export default function Keys() {
   const [rows, setRows] = useState([]);
   const [name, setName] = useState("");
@@ -11,14 +29,9 @@ export default function Keys() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    apiGet("/v1/api-keys")
-      .then((data) => setRows(data.api_keys || []))
-      .catch((caught) => setError(caught.message));
+    apiGet("/v1/api-keys").then((data) => setRows(data.api_keys || [])).catch((caught) => setError(caught.message));
   }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   async function create(event) {
     event.preventDefault();
@@ -29,95 +42,70 @@ export default function Keys() {
       setCreated(body.api_key);
       setName("");
       load();
-    } catch (caught) {
-      setError(caught.message);
-    } finally {
-      setBusy(false);
-    }
+    } catch (caught) { setError(caught.message); }
+    finally { setBusy(false); }
   }
 
   async function revoke(id) {
     setError("");
-    try {
-      await apiPost(`/v1/api-keys/${id}/revoke`, {});
-      load();
-    } catch (caught) {
-      setError(caught.message);
-    }
+    try { await apiPost(`/v1/api-keys/${id}/revoke`, {}); load(); }
+    catch (caught) { setError(caught.message); }
   }
 
   return (
     <>
-      <header className="top">
-        <div>
-          <p className="eyebrow">API keys</p>
-          <h1>A key cannot approve a payment.</h1>
-        </div>
-      </header>
+      <PageHeader overline="API keys" title="A key cannot approve a payment." />
+      <Banner>{error}</Banner>
 
-      {error ? <p className="banner">{error}</p> : null}
+      <Card sx={{ mb: 3 }}>
+        <CardHeader title="Create a key" />
+        <CardContent>
+          <Stack component="form" onSubmit={create} direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "flex-end" }}>
+            <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="CI pipeline" required size="small" sx={{ flex: 1 }} />
+            <Button type="submit" variant="contained" disabled={busy}>Create key</Button>
+          </Stack>
+          {created ? (
+            <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, border: "1px dashed", borderColor: "success.main", bgcolor: "rgba(34,197,94,0.06)" }}>
+              <Typography variant="body2" color="text.secondary">Copy this now. It is shown once.</Typography>
+              <Typography sx={{ ...MONO, mt: 0.5, wordBreak: "break-all", color: "success.dark" }}>{created.secret}</Typography>
+            </Box>
+          ) : null}
+        </CardContent>
+      </Card>
 
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Create a key</h2>
-        </div>
-        <form onSubmit={create} className="inline-form">
-          <label className="field">
-            <span>Name</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="CI pipeline" required />
-          </label>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            Create key
-          </button>
-        </form>
-        {created ? (
-          <div className="secret">
-            <p className="meta">Copy this now. It is shown once.</p>
-            <code>{created.secret}</code>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Keys</h2>
-          <button className="link-button" onClick={load}>
-            Refresh
-          </button>
-        </div>
-        {rows.length === 0 ? (
-          <p className="meta">No keys yet.</p>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Prefix</th>
-                <th>Status</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.name}</td>
-                  <td className="mono">mk_{row.prefix}…</td>
-                  <td>
-                    <span className={`badge badge-${row.revoked_at ? "revoked" : "active"}`}>{row.revoked_at ? "revoked" : "active"}</span>
-                  </td>
-                  <td className="actions">
-                    {row.revoked_at ? null : (
-                      <button className="btn" onClick={() => revoke(row.id)}>
-                        Revoke
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <Card>
+        <CardHeader title="Keys" action={<Button size="small" onClick={load}>Refresh</Button>} />
+        <CardContent>
+          {rows.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">No keys yet.</Typography>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Prefix</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell align="right" />
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow key={row.id} hover>
+                      <TableCell>{row.name}</TableCell>
+                      <TableCell sx={MONO}>mk_{row.prefix}…</TableCell>
+                      <TableCell><StatusChip status={row.revoked_at ? "revoked" : "active"} /></TableCell>
+                      <TableCell align="right">
+                        {row.revoked_at ? null : <Button size="small" color="inherit" variant="outlined" onClick={() => revoke(row.id)}>Revoke</Button>}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </CardContent>
+      </Card>
     </>
   );
 }

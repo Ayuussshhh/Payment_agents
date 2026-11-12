@@ -5,6 +5,16 @@ import { useRouter } from "next/navigation";
 import { signIn, signUp } from "../../lib/auth-client";
 import { apiPost } from "../../lib/api";
 
+import Avatar from "@mui/material/Avatar";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { Banner } from "../../components/ui";
+
 export default function SignIn() {
   const router = useRouter();
   const [mode, setMode] = useState("sign-in");
@@ -27,7 +37,6 @@ export default function SignIn() {
         const result = await signIn.email({ email, password });
         if (result.error) throw new Error(result.error.message || "Sign-in failed");
       }
-      // Ensure the signed-in user has an organization and owner role.
       await apiPost("/v1/onboarding", { organization_name: workspace });
       router.push("/");
       router.refresh();
@@ -38,54 +47,49 @@ export default function SignIn() {
     }
   }
 
+  const isSignUp = mode === "sign-up";
+
   return (
-    <div className="auth-wrap">
-      <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand">
-          <span className="mark">M</span>
-          <strong>Mandate Studio</strong>
-        </div>
-        <h1 className="auth-title">{mode === "sign-up" ? "Create your workspace" : "Sign in"}</h1>
-        <p className="auth-sub">The studio calls the engine. It never approves a payment on its own.</p>
+    <Box
+      sx={{
+        minHeight: "100vh", display: "grid", placeItems: "center", p: 2,
+        background: "radial-gradient(800px 500px at 50% -10%, rgba(20,83,116,0.12), transparent 60%), #F8FAFC",
+      }}
+    >
+      <Card sx={{ width: "100%", maxWidth: 420 }}>
+        <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
+          <Stack direction="row" alignItems="center" spacing={1.25} sx={{ mb: 3 }}>
+            <Avatar variant="rounded" sx={{ bgcolor: "primary.main", fontWeight: 700 }}>M</Avatar>
+            <Typography sx={{ fontWeight: 700 }}>Mandate Studio</Typography>
+          </Stack>
 
-        {mode === "sign-up" ? (
-          <label className="field">
-            <span>Name</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ada Lovelace" />
-          </label>
-        ) : null}
-        <label className="field">
-          <span>Email</span>
-          <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input type="password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" />
-        </label>
-        {mode === "sign-up" ? (
-          <label className="field">
-            <span>Workspace name</span>
-            <input value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="Acme" />
-          </label>
-        ) : null}
+          <Typography variant="h2" sx={{ fontSize: "1.6rem" }}>{isSignUp ? "Create your workspace" : "Sign in"}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 3 }}>
+            The studio calls the engine. It never approves a payment on its own.
+          </Typography>
 
-        {error ? <p className="banner">{error}</p> : null}
+          <Banner onClose={() => setError("")}>{error}</Banner>
 
-        <button className="btn btn-primary" type="submit" disabled={busy}>
-          {busy ? "Working…" : mode === "sign-up" ? "Create workspace" : "Sign in"}
-        </button>
-
-        <button
-          type="button"
-          className="auth-switch"
-          onClick={() => {
-            setMode(mode === "sign-up" ? "sign-in" : "sign-up");
-            setError("");
-          }}
-        >
-          {mode === "sign-up" ? "Already have an account? Sign in" : "New here? Create a workspace"}
-        </button>
-      </form>
-    </div>
+          <Box component="form" onSubmit={submit}>
+            <Stack spacing={2}>
+              {isSignUp ? (
+                <TextField label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" fullWidth size="small" />
+              ) : null}
+              <TextField label="Email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" fullWidth size="small" />
+              <TextField label="Password" type="password" required inputProps={{ minLength: 8 }} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" fullWidth size="small" />
+              {isSignUp ? (
+                <TextField label="Workspace name" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Acme" fullWidth size="small" />
+              ) : null}
+              <Button type="submit" variant="contained" size="large" disabled={busy} fullWidth>
+                {busy ? "Working…" : isSignUp ? "Create workspace" : "Sign in"}
+              </Button>
+              <Button type="button" variant="text" onClick={() => { setMode(isSignUp ? "sign-in" : "sign-up"); setError(""); }} sx={{ color: "text.secondary" }}>
+                {isSignUp ? "Already have an account? Sign in" : "New here? Create a workspace"}
+              </Button>
+            </Stack>
+          </Box>
+        </CardContent>
+      </Card>
+    </Box>
   );
 }
