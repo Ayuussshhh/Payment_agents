@@ -1,0 +1,56 @@
+# Runs the Python engine (API) on Linux so the native wheels load. The UI runs
+# natively on Windows (corepack pnpm dev in apps/web) and talks to this on :8001.
+#
+#   docker compose up --build
+#
+# By default the API uses the DATABASE_URL in your .env (your Neon URL). The UI
+# must point at the same database, so leave the web app's DATABASE_URL on Neon
+# too. To run a throwaway local Postgres instead, uncomment the db service and
+# the DATABASE_URL line in the api service.
+
+services:
+  api:
+    build: .
+    env_file:
+      - .env
+    environment:
+      RELOAD: "1"
+      # Use the bundled Postgres instead of Neon:
+      # DATABASE_URL: postgresql+psycopg://mandate:mandate@db:5432/mandate
+    ports:
+      - "8001:8001"
+    volumes:
+      # Live reload: edits to the engine and API are picked up without rebuild.
+      - ./packages:/app/packages
+      - ./services:/app/services
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+
+  worker:
+    build: .
+    env_file:
+      - .env
+    # The outbox worker publishes committed events, then marks them delivered.
+    entrypoint: ["python", "-m", "mandate_core.events.worker"]
+    volumes:
+      - ./packages:/app/packages
+
+  # db:
+  #   image: postgres:18
+  #   environment:
+  #     POSTGRES_USER: mandate
+  #     POSTGRES_PASSWORD: mandate
+  #     POSTGRES_DB: mandate
+  #   ports:
+  #     - "5432:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U mandate"]
+  #     interval: 3s
+  #     timeout: 3s
+  #     retries: 20
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+# volumes:
+#   pgdata:

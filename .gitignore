@@ -6,3 +6,5 @@ __pycache__/
 data/
 apps/web/node_modules/
 apps/web/.next/
+.env.local
+.env*.local

@@ -183,3 +183,38 @@ class EventEnvelope(ContractModel):
     request_id: str
     payload: dict
     occurred_at: datetime
+
+
+TransactionStatus = Literal[
+    "prepared",
+    "reserved",
+    "authorized",
+    "captured",
+    "voided",
+    "refunded",
+    "failed",
+    "unknown",
+]
+
+
+class Transaction(ContractModel):
+    """One payment, provider-independent. The row is the authority; a provider
+    willing to charge a nearby amount is irrelevant."""
+
+    id: UUID
+    organization_id: UUID
+    proposal_id: UUID
+    approval_id: UUID
+    policy_version_id: UUID
+    cart_hash: str
+    amount_minor: int
+    currency: str
+    status: TransactionStatus
+    provider: str
+    provider_order_id: str | None = None
+    provider_authorization_id: str | None = None
+    provider_capture_id: str | None = None
+    reason_code: str = ""
+    idempotency_key: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

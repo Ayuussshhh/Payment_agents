@@ -12,6 +12,8 @@ from mandate_core.contracts.models import (
     PolicyDraft,
     PolicyVersion,
     Proposal,
+    Transaction,
+    TransactionStatus,
 )
 
 __all__ = [
@@ -27,5 +29,7 @@ __all__ = [
     "PolicyDraft",
     "PolicyVersion",
     "Proposal",
+    "Transaction",
+    "TransactionStatus",
     "refuse_model_context",
 ]

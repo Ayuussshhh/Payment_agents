@@ -18,10 +18,18 @@ from mandate_core.settings import model_configured, model_name, model_provider
 from mandate_core.contracts.models import ModelRef
 from mandate_core.errors import EngineError
 from mandate_core.identity import resolve_execution_context
+from mandate_core.identity import api_keys as api_keys_store
+from mandate_core.identity.onboarding import bootstrap_membership
+from mandate_core.identity.catalog import expand_roles
+from mandate_core.contracts import ExecutionContext
+from mandate_core.audit import get_timeline, verify_history
+from mandate_core.models import read_usage
 from mandate_core.approval import ApprovalEngine
 from mandate_core.policy import ModelDrafter, PolicyEngine
 from mandate_core.models import SqlUsage, default_registry
+from mandate_core.commerce import CommerceEngine, PayPalProvider, handle_webhook
 from mandate_core.skills import SkillRuntime
+from mandate_core.skills.catalog import list_products
 from mandate_core.persistence.agents import AgentRepository
 from mandate_core.runtime import AgentRuntime, OrchestratedModel
 from mandate_core.runtime.sql_store import SqlRuntimeStore
@@ -31,6 +39,7 @@ RESOURCES = [
     {"method": "GET", "path": "/health", "purpose": "Process, database, and Redis connectivity."},
     {"method": "GET", "path": "/v1", "purpose": "Engine name, package version, and this resource list."},
     {"method": "GET", "path": "/v1/context", "purpose": "Resolve a session into an execution context."},
+    {"method": "POST", "path": "/v1/onboarding", "purpose": "Give a new signed-in user an organization and owner role."},
     {"method": "POST", "path": "/v1/agents", "purpose": "Create an agent definition."},
     {"method": "GET", "path": "/v1/agents/{id}", "purpose": "Read one agent in the caller's organization."},
     {"method": "POST", "path": "/v1/agents/{id}/versions", "purpose": "Publish an immutable agent version."},
@@ -50,6 +59,19 @@ RESOURCES = [
     {"method": "GET", "path": "/v1/approvals/{id}", "purpose": "Read one approval snapshot, hash, expiry, and status."},
     {"method": "POST", "path": "/v1/approvals/{id}/approve", "purpose": "Bind the caller to that exact cart."},
     {"method": "POST", "path": "/v1/approvals/{id}/reject", "purpose": "Reject a pending approval or revoke a valid one."},
+    {"method": "GET", "path": "/v1/catalog", "purpose": "The merchant catalog the skill reads. Prices are minor units."},
+    {"method": "POST", "path": "/v1/payments", "purpose": "Reserve budget and create a provider order for the approved amount."},
+    {"method": "POST", "path": "/v1/payments/{id}/authorize", "purpose": "Authorize the provider order this payment created."},
+    {"method": "POST", "path": "/v1/payments/{id}/capture", "purpose": "Capture when the catalog hash still matches. Otherwise void."},
+    {"method": "POST", "path": "/v1/payments/{id}/void", "purpose": "Void an open authorization."},
+    {"method": "POST", "path": "/v1/payments/{id}/refund", "purpose": "Refund a capture, full amount in this release."},
+    {"method": "GET", "path": "/v1/payments/{id}", "purpose": "Transaction, attempts, and reason code."},
+    {"method": "POST", "path": "/v1/providers/paypal/webhook", "purpose": "Verified provider events only."},
+    {"method": "GET", "path": "/v1/timeline", "purpose": "Audit timeline for an aggregate, type and id query."},
+    {"method": "GET", "path": "/v1/usage", "purpose": "Token counts for the organization."},
+    {"method": "POST", "path": "/v1/api-keys", "purpose": "Create a key. The secret is in this response only."},
+    {"method": "GET", "path": "/v1/api-keys", "purpose": "List keys. Secrets are never returned again."},
+    {"method": "POST", "path": "/v1/api-keys/{id}/revoke", "purpose": "Revoke a key immediately."},
 ]
 
 
@@ -93,6 +115,32 @@ class ApprovalIn(BaseModel):
 class RejectIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     reason: str = ""
+
+
+class PaymentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    proposal_id: UUID
+    approval_id: UUID
+
+
+class AuthorizeTxnIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order_id: str = Field(min_length=1)
+
+
+class RefundTxnIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    amount_minor: int | None = None
+
+
+class ApiKeyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1)
+
+
+class OnboardingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    organization_name: str = ""
 
 
 def database_ok(engine: Engine | None) -> bool:
@@ -200,6 +248,13 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
             raise EngineError("unauthenticated", "A session token is required.", 401)
         require_engine()
         return token
+
+    @app.post("/v1/onboarding")
+    def onboarding(body: OnboardingIn, request: Request):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            result = bootstrap_membership(connection, token, body.organization_name, request.state.request_id)
+        return {"onboarding": result}
 
     @app.get("/v1/context")
     def context(request: Request, organization_id: UUID | None = Query(default=None)):
@@ -478,6 +533,137 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
             )
             rejected = approvals.reject(connection, resolved, approval_id, body.reason, key)
         return {"approval": rejected.model_dump(mode="json")}
+
+    # ---- commerce (v0.8) ---------------------------------------------------
+
+    def payment_provider():
+        if not (os.environ.get("PAYPAL_CLIENT_ID") or "").strip():
+            raise EngineError("provider_unconfigured", "No payment provider is configured. Set PAYPAL_CLIENT_ID.", 503)
+        return PayPalProvider()
+
+    def commerce_for():
+        return CommerceEngine(payment_provider())
+
+    @app.get("/v1/catalog")
+    def catalog():
+        return {"catalog": list_products()}
+
+    @app.post("/v1/payments")
+    async def create_payment(body: PaymentIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        key = require_idempotency(request)
+        engine = commerce_for()
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            transaction = await engine.prepare(connection, resolved, body.proposal_id, body.approval_id, key)
+        return {"payment": transaction.model_dump(mode="json")}
+
+    @app.post("/v1/payments/{transaction_id}/authorize")
+    async def authorize_payment(transaction_id: UUID, body: AuthorizeTxnIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        engine = commerce_for()
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            transaction = await engine.authorize(connection, resolved, transaction_id, body.order_id)
+        return {"payment": transaction.model_dump(mode="json")}
+
+    @app.post("/v1/payments/{transaction_id}/capture")
+    async def capture_payment(transaction_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        engine = commerce_for()
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            transaction = await engine.capture(connection, resolved, transaction_id)
+        return {"payment": transaction.model_dump(mode="json")}
+
+    @app.post("/v1/payments/{transaction_id}/void")
+    async def void_payment(transaction_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        engine = commerce_for()
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            transaction = await engine.void(connection, resolved, transaction_id)
+        return {"payment": transaction.model_dump(mode="json")}
+
+    @app.post("/v1/payments/{transaction_id}/refund")
+    async def refund_payment(transaction_id: UUID, request: Request, body: RefundTxnIn | None = None, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        engine = commerce_for()
+        amount = body.amount_minor if body is not None else None
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            transaction = await engine.refund(connection, resolved, transaction_id, amount)
+        return {"payment": transaction.model_dump(mode="json")}
+
+    @app.get("/v1/payments/{transaction_id}")
+    def read_payment(transaction_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            engine = CommerceEngine()  # read path needs no provider
+            transaction = engine.get(connection, resolved, transaction_id)
+            attempts = engine.attempts(connection, resolved, transaction_id)
+        return {"payment": transaction.model_dump(mode="json"), "attempts": attempts}
+
+    @app.post("/v1/providers/paypal/webhook")
+    async def paypal_webhook(request: Request):
+        provider = payment_provider()
+        body = await request.body()
+        with app.state.engine.begin() as connection:
+            result = await handle_webhook(connection, provider, dict(request.headers), body)
+        return {"webhook": result}
+
+    # ---- audit, usage, and developer keys (v0.9) ---------------------------
+
+    def resolve_any(connection, token, organization_id, request_id):
+        """A Better Auth session, or an `mk_` API key scoped to one organization."""
+        if token.startswith("mk_"):
+            org = api_keys_store.resolve_key(connection, token)
+            if organization_id is not None and organization_id != org:
+                raise EngineError("forbidden", "That key is for a different organization.", 403)
+            return ExecutionContext(organization_id=org, user_id=None, request_id=request_id, permissions=expand_roles(["developer"]))
+        return resolve_execution_context(connection, token, organization_id=organization_id, request_id=request_id)
+
+    @app.get("/v1/timeline")
+    def timeline(request: Request, type: str = Query(min_length=1), id: UUID = Query(...), organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_any(connection, token, organization_id, request.state.request_id)
+            events = get_timeline(connection, resolved, type, id)
+            report = verify_history(connection, resolved, type, id)
+        return {"timeline": events, "report": report}
+
+    @app.get("/v1/usage")
+    def usage(request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_any(connection, token, organization_id, request.state.request_id)
+            summary = read_usage(connection, resolved)
+        return {"usage": summary}
+
+    @app.post("/v1/api-keys")
+    def create_api_key(body: ApiKeyIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            created = api_keys_store.create_key(connection, resolved, body.name)
+        return {"api_key": created}
+
+    @app.get("/v1/api-keys")
+    def list_api_keys(request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            keys = api_keys_store.list_keys(connection, resolved)
+        return {"api_keys": keys}
+
+    @app.post("/v1/api-keys/{key_id}/revoke")
+    def revoke_api_key(key_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(connection, token, organization_id=organization_id, request_id=request.state.request_id)
+            result = api_keys_store.revoke_key(connection, resolved, key_id)
+        return {"api_key": result}
 
     return app
 

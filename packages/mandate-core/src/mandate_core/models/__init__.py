@@ -4,7 +4,7 @@ from mandate_core.models.orchestrator import ModelOrchestrator
 from mandate_core.models.providers import OpenAIProvider, StaticProvider
 from mandate_core.models.registry import ProviderRegistry, default_registry
 from mandate_core.models.types import ModelCapabilities, ModelRequest, ModelResponse
-from mandate_core.models.usage import MemoryUsage, SqlUsage
+from mandate_core.models.usage import MemoryUsage, SqlUsage, read_usage
 
 __all__ = [
     "MemoryUsage",
@@ -17,4 +17,5 @@ __all__ = [
     "SqlUsage",
     "StaticProvider",
     "default_registry",
+    "read_usage",
 ]
