@@ -91,7 +91,7 @@ a {
   justify-content: space-between;
   align-items: flex-end;
   gap: 1rem;
-  max-width: 920px;
+  max-width: 1080px;
 }
 
 .eyebrow {
@@ -132,7 +132,7 @@ h2 {
 }
 
 .banner {
-  max-width: 920px;
+  max-width: 1080px;
   margin-top: 1rem;
   padding: 0.8rem 1rem;
   border-radius: 0.8rem;
@@ -145,7 +145,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.8rem;
-  max-width: 920px;
+  max-width: 1080px;
   margin-top: 1.6rem;
 }
 
@@ -181,7 +181,7 @@ h2 {
 
 .panel,
 .empty {
-  max-width: 920px;
+  max-width: 1080px;
   margin-top: 1rem;
   padding: 1.1rem 1.15rem 1.2rem;
 }
@@ -638,4 +638,142 @@ h2 {
   .nav-group {
     display: contents;
   }
+}
+
+.boot {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: #71717a;
+  font-size: 0.95rem;
+}
+
+/* ---- Agentic checkout flow ---------------------------------------------- */
+
+.hero {
+  max-width: 760px;
+  margin-bottom: 1.6rem;
+}
+
+.hero h1 {
+  max-width: 20ch;
+  font-size: 2.2rem;
+  margin-top: 0.4rem;
+}
+
+.lede {
+  margin-top: 0.9rem;
+  color: #a1a1aa;
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 62ch;
+}
+
+.step {
+  display: flex;
+  gap: 1rem;
+  max-width: 760px;
+  margin-top: 0.9rem;
+  padding: 1.15rem 1.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 1rem;
+  background: #111113;
+}
+
+.step-locked {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.step-num {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #d4d4d8;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.step-num.step-done {
+  background: #bbf7d0;
+  border-color: #bbf7d0;
+  color: #052e16;
+}
+
+.step-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.step-body h2 {
+  margin-bottom: 0.6rem;
+}
+
+.step-body .btn {
+  margin-top: 0.6rem;
+}
+
+.choice {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.8rem;
+  background: #0c0c0e;
+}
+
+.choice-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+
+.reasoning {
+  margin: 0.7rem 0 0;
+  color: #e7e5e4;
+  font-size: 0.98rem;
+  line-height: 1.55;
+  font-style: italic;
+}
+
+.return-wrap {
+  min-height: 70vh;
+  display: grid;
+  place-items: center;
+}
+
+.return-card {
+  max-width: 460px;
+  text-align: center;
+}
+
+.return-card .btn {
+  margin-top: 1.1rem;
+}
+
+.big-badge {
+  width: 3.2rem;
+  height: 3.2rem;
+  margin: 0 auto 0.8rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.big-badge.ok {
+  background: rgba(134, 239, 172, 0.12);
+  color: #bbf7d0;
+  border: 1px solid rgba(134, 239, 172, 0.4);
+}
+
+.big-badge.warn {
+  background: rgba(253, 230, 138, 0.1);
+  color: #fde68a;
+  border: 1px solid rgba(253, 230, 138, 0.4);
 }

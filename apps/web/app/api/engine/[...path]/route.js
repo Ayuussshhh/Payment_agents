@@ -7,7 +7,7 @@ const API = process.env.MANDATE_API_URL || "http://127.0.0.1:8001";
 
 async function sessionToken(request) {
   try {
-    const auth = createAuth();
+    const auth = await createAuth();
     const session = await auth.api.getSession({ headers: request.headers });
     return session?.session?.token || "";
   } catch {

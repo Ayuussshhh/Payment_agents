@@ -1,31 +1,26 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "../lib/auth-client";
 
 const GROUPS = [
   {
-    label: "Build",
+    label: "Commerce",
     items: [
-      { href: "/", label: "Overview" },
-      { href: "/agents", label: "Agents" },
-      { href: "/skills", label: "Skills" },
-      { href: "/models", label: "Models" },
-      { href: "/runs", label: "Runs" },
-    ],
-  },
-  {
-    label: "Spend",
-    items: [
+      { href: "/", label: "Checkout" },
       { href: "/policies", label: "Policies" },
       { href: "/approvals", label: "Approvals" },
       { href: "/payments", label: "Payments" },
     ],
   },
   {
-    label: "Account",
+    label: "Developer",
     items: [
+      { href: "/agents", label: "Agents" },
+      { href: "/skills", label: "Skills" },
+      { href: "/models", label: "Models" },
       { href: "/usage", label: "Usage" },
       { href: "/keys", label: "API keys" },
     ],
@@ -35,10 +30,26 @@ const GROUPS = [
 export default function Shell({ children }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, isPending } = useSession();
+
+  const signedIn = Boolean(session?.user);
+
+  useEffect(() => {
+    if (!isPending && !signedIn && pathname !== "/sign-in") {
+      router.replace("/sign-in");
+    }
+  }, [isPending, signedIn, pathname, router]);
 
   if (pathname === "/sign-in") {
     return <>{children}</>;
+  }
+
+  if (isPending) {
+    return <div className="boot">Loading…</div>;
+  }
+
+  if (!signedIn) {
+    return <div className="boot">Redirecting to sign-in…</div>;
   }
 
   return (
@@ -67,25 +78,17 @@ export default function Shell({ children }) {
           ))}
         </nav>
         <div className="rail-foot">
-          {session?.user ? (
-            <>
-              <p className="rail-user">{session.user.email}</p>
-              <button
-                className="link-button"
-                onClick={async () => {
-                  await signOut();
-                  router.push("/sign-in");
-                  router.refresh();
-                }}
-              >
-                Sign out
-              </button>
-            </>
-          ) : (
-            <Link className="link-button" href="/sign-in">
-              Sign in
-            </Link>
-          )}
+          <p className="rail-user">{session.user.email}</p>
+          <button
+            className="link-button"
+            onClick={async () => {
+              await signOut();
+              router.push("/sign-in");
+              router.refresh();
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </aside>
       <div className="stage">{children}</div>
