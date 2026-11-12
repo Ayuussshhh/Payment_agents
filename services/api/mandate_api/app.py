@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from redis import Redis
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -16,6 +16,8 @@ from mandate_core import __version__
 from mandate_core.settings import database_url as configured_database_url
 from mandate_core.errors import EngineError
 from mandate_core.identity import resolve_execution_context
+from mandate_core.approval import ApprovalEngine
+from mandate_core.policy import PolicyEngine
 from mandate_core.models import default_registry
 from mandate_core.skills import SkillRuntime
 from mandate_core.persistence.agents import AgentRepository
@@ -36,6 +38,16 @@ RESOURCES = [
     {"method": "GET", "path": "/v1/runs/{id}", "purpose": "Read a run, its trace, and its proposal ids."},
     {"method": "GET", "path": "/v1/models", "purpose": "Provider names and capability metadata. No secrets."},
     {"method": "GET", "path": "/v1/skills", "purpose": "Skills that can be attached. PayPal is not a skill."},
+    {"method": "POST", "path": "/v1/policies", "purpose": "Compile an instruction into a draft policy version."},
+    {"method": "GET", "path": "/v1/policies", "purpose": "List policy versions. Active versions are not edited in place."},
+    {"method": "POST", "path": "/v1/policies/{id}/activate", "purpose": "Activate a draft that has no ambiguities."},
+    {"method": "POST", "path": "/v1/decisions", "purpose": "Evaluate one catalog SKU. The catalog owns the price."},
+    {"method": "POST", "path": "/v1/proposals", "purpose": "Evaluate one catalog SKU. Same decision as /v1/decisions."},
+    {"method": "POST", "path": "/v1/approvals", "purpose": "Open an approval for one evaluated cart."},
+    {"method": "GET", "path": "/v1/approvals", "purpose": "List approvals in the caller's organization."},
+    {"method": "GET", "path": "/v1/approvals/{id}", "purpose": "Read one approval snapshot, hash, expiry, and status."},
+    {"method": "POST", "path": "/v1/approvals/{id}/approve", "purpose": "Bind the caller to that exact cart."},
+    {"method": "POST", "path": "/v1/approvals/{id}/reject", "purpose": "Reject a pending approval or revoke a valid one."},
 ]
 
 
@@ -52,6 +64,28 @@ class VersionIn(BaseModel):
     provider: str
     model: str
     temperature: float = 0
+
+
+class PolicyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    instruction: str = Field(min_length=1)
+
+
+class DecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policy_id: UUID
+    sku: str = Field(min_length=1)
+    suggested_unit_amount_minor: int | None = None
+
+
+class ApprovalIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    proposal_id: UUID
+
+
+class RejectIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = ""
 
 
 def database_ok(engine: Engine | None) -> bool:
@@ -138,6 +172,8 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
         return {"name": "Mandate", "version": "v1", "engine_version": __version__, "resources": RESOURCES}
 
     agents = AgentRepository()
+    policies = PolicyEngine()
+    approvals = ApprovalEngine()
 
     def bearer(request: Request) -> str:
         header = request.headers.get("authorization", "")
@@ -271,6 +307,159 @@ def create_app(database_url: str | None = None, redis_client=None, engine: Engin
         if run is None:
             raise EngineError("not_found", "That run does not exist.", 404)
         return {"run": run.model_dump(mode="json")}
+
+    def require_idempotency(request: Request) -> str:
+        key = (request.headers.get("idempotency-key") or "").strip()
+        if not key:
+            raise EngineError("idempotency_key_required", "An Idempotency-Key header is required.", 400)
+        return key
+
+    @app.post("/v1/policies")
+    def create_policy(body: PolicyIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            created = policies.create_draft(connection, resolved, body.instruction)
+        return {"policy": created.model_dump(mode="json")}
+
+    @app.get("/v1/policies")
+    def list_policies(request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            rows = policies.list_versions(connection, resolved)
+        return {"policies": [row.model_dump(mode="json") for row in rows], "next_cursor": None}
+
+    @app.post("/v1/policies/{version_id}/activate")
+    def activate_policy(version_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        key = require_idempotency(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            activated = policies.activate(connection, resolved, version_id, key)
+        return {"policy": activated.model_dump(mode="json")}
+
+    def decide_sku(body: DecisionIn, request: Request, organization_id: UUID | None):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            decision, evaluation_id, proposal_id = policies.evaluate_sku(
+                connection,
+                resolved,
+                body.policy_id,
+                body.sku,
+                suggested_unit_amount_minor=body.suggested_unit_amount_minor,
+            )
+        trace = []
+        if body.suggested_unit_amount_minor is not None:
+            trace.append("suggested_unit_amount_minor was ignored. The catalog price was used.")
+        return {
+            "decision": decision.model_dump(mode="json"),
+            "evaluation_id": str(evaluation_id),
+            "proposal_id": str(proposal_id),
+            "proposal": {
+                "sku": body.sku,
+                "total_minor": decision.evaluated_amount_minor,
+                "cart_hash": decision.cart_hash,
+            },
+            "trace": trace,
+        }
+
+    @app.post("/v1/decisions")
+    def decide_route(body: DecisionIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        return decide_sku(body, request, organization_id)
+
+    @app.post("/v1/proposals")
+    def propose_route(body: DecisionIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        return decide_sku(body, request, organization_id)
+
+    @app.post("/v1/approvals")
+    def request_approval(body: ApprovalIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        key = require_idempotency(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            opened = approvals.request_approval(connection, resolved, body.proposal_id, key)
+        return {"approval": opened.model_dump(mode="json")}
+
+    @app.get("/v1/approvals")
+    def list_approvals(request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            rows = approvals.list_approvals(connection, resolved)
+        return {"approvals": [row.model_dump(mode="json") for row in rows], "next_cursor": None}
+
+    @app.get("/v1/approvals/{approval_id}")
+    def read_approval(approval_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            found = approvals.get(connection, resolved, approval_id)
+        return {"approval": found.model_dump(mode="json")}
+
+    @app.post("/v1/approvals/{approval_id}/approve")
+    def approve_approval(approval_id: UUID, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        key = require_idempotency(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            granted = approvals.approve(connection, resolved, approval_id, key)
+        return {"approval": granted.model_dump(mode="json")}
+
+    @app.post("/v1/approvals/{approval_id}/reject")
+    def reject_approval(approval_id: UUID, body: RejectIn, request: Request, organization_id: UUID | None = Query(default=None)):
+        token = require_session(request)
+        key = require_idempotency(request)
+        with app.state.engine.begin() as connection:
+            resolved = resolve_execution_context(
+                connection,
+                token,
+                organization_id=organization_id,
+                request_id=request.state.request_id,
+            )
+            rejected = approvals.reject(connection, resolved, approval_id, body.reason, key)
+        return {"approval": rejected.model_dump(mode="json")}
 
     return app
 

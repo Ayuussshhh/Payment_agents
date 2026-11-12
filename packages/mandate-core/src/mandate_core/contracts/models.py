@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from mandate_core.contracts.context import ContractModel
 
@@ -62,6 +62,26 @@ class RequiredSpecs(ContractModel):
     storage_type: Literal["ssd"]
 
 
+class PolicyVersion(ContractModel):
+    """One immutable policy document. Status moves draft, then active, then retired."""
+
+    id: UUID
+    organization_id: UUID
+    policy_id: UUID
+    name: str
+    version: int = Field(ge=1)
+    status: Literal["draft", "active", "retired"]
+    currency: str = Field(min_length=3, max_length=3)
+    maximum_total_minor: int = Field(gt=0)
+    constraints: dict
+    original_instruction: str
+    ambiguities: tuple[str, ...] = ()
+    preferences: tuple[str, ...] = ()
+    expires_at: datetime
+    created_at: datetime
+    activated_at: datetime | None = None
+
+
 class PolicyDraft(ContractModel):
     """Compiler output. Status is not a field, so a model cannot activate a policy."""
 
@@ -100,6 +120,44 @@ class Proposal(ContractModel):
     seller: Seller
     lines: tuple[CartLine, ...]
     total_minor: int = Field(ge=0)
+
+
+class ApprovalSnapshot(ContractModel):
+    """The exact cart a person approved. The database row is the authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    organization_id: UUID
+    approver_user_id: UUID
+    agent_version_id: UUID | None = None
+    policy_version_id: UUID
+    policy_version: int
+    proposal_id: UUID
+    cart_hash: str
+    hash_version: int
+    amount_minor: int
+    currency: str
+    merchant_id: str
+    expires_at: datetime
+
+
+class Approval(ContractModel):
+    id: UUID
+    organization_id: UUID
+    proposal_id: UUID
+    policy_version_id: UUID
+    policy_version: int
+    agent_version_id: UUID | None = None
+    approver_user_id: UUID | None = None
+    cart_hash: str
+    hash_version: int
+    amount_minor: int
+    currency: str
+    merchant_id: str
+    status: Literal["pending", "valid", "rejected", "expired", "revoked", "consumed"]
+    expires_at: datetime
+    created_at: datetime
+    signature: str | None = None
 
 
 class PolicyDecision(ContractModel):

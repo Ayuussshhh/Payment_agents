@@ -1,16 +1,17 @@
 """Alembic environment. The database URL comes from DATABASE_URL."""
 
-import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from mandate_core.settings import database_url as configured_database_url
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.environ.get("DATABASE_URL")
+database_url = configured_database_url()
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
